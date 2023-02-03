@@ -1,0 +1,1 @@
+# Decompose compressed .fasta files into individual contigs
