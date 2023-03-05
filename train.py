@@ -7,6 +7,8 @@ from pipelines.d2v_bigbird_base import TransformerClusterModel
 #from bigbird.core import modeling
 from bigbird.core import flags
 
+from absl import app
+
 import tensorflow.compat.v2 as tf
 from tqdm import tqdm
 import sys
@@ -15,8 +17,6 @@ import sys
 # not sure what it does but it somehow, um, contains the model
 from tensorflow.python.ops.variable_scope import EagerVariableStore
 container = EagerVariableStore()
-
-#"""
 
 # Set flags, slightly modified from pumbed.ipynb
 FLAGS = flags.FLAGS
@@ -131,3 +131,10 @@ print('Log Likelihood = {}'.format(eval_llh.result().numpy()))
 # to get predictions, call:
 #_, _, pred_ids = fwd_only(ex[0], ex[1])
 # then detokenize pred_ids
+
+# absl stuff
+def main(_):
+  print("Running absl")
+
+if __name__ == '__main__':
+  app.run(main)

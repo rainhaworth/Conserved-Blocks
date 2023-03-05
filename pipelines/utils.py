@@ -11,6 +11,106 @@ from pipelines.d2v_bigbird_base import TransformerClusterModel
 from bigbird.core import modeling
 from bigbird.core import utils
 from bigbird.core import optimization
+from bigbird.core import flags
+
+# Define flags (from run_summarization)
+
+## Required parameters
+
+FLAGS = flags.FLAGS
+
+flags.DEFINE_string(
+    "data_dir", "tfds://scientific_papers/pubmed",
+    "The input data dir. Should contain the TFRecord files. "
+    "Can be TF Dataset with prefix tfds://")
+
+flags.DEFINE_string(
+    "output_dir", "/tmp/bigb",
+    "The output directory where the model checkpoints will be written.")
+
+## Other parameters
+
+flags.DEFINE_string(
+    "init_checkpoint", None,
+    "Initial checkpoint (usually from a pre-trained BigBird model).")
+
+flags.DEFINE_integer(
+    "max_encoder_length", 128,
+    "The maximum total input sequence length after SentencePiece tokenization. "
+    "Sequences longer than this will be truncated, and sequences shorter "
+    "than this will be padded.")
+
+flags.DEFINE_integer(
+    "max_decoder_length", 128,
+    "The maximum total input sequence length after SentencePiece tokenization. "
+    "Sequences longer than this will be truncated, and sequences shorter "
+    "than this will be padded.")
+
+flags.DEFINE_string(
+    "substitute_newline", None,
+    "Replace newline charachter from text with supplied string.")
+
+flags.DEFINE_bool(
+    "do_train", True,
+    "Whether to run training.")
+
+flags.DEFINE_bool(
+    "do_eval", False,
+    "Whether to run eval on the dev set.")
+
+flags.DEFINE_bool(
+    "do_export", False,
+    "Whether to export the model as TF SavedModel.")
+
+flags.DEFINE_integer(
+    "train_batch_size", 8,
+    "Local batch size for training. "
+    "Total batch size will be multiplied by number gpu/tpu cores available.")
+
+flags.DEFINE_integer(
+    "eval_batch_size", 8,
+    "Local batch size for eval. "
+    "Total batch size will be multiplied by number gpu/tpu cores available.")
+
+flags.DEFINE_string(
+    "optimizer", "Adafactor",
+    "Optimizer to use. Can be Adafactor, Adam, and AdamWeightDecay.")
+
+flags.DEFINE_float(
+    "learning_rate", 0.32,
+    "The initial learning rate for Adam.")
+
+flags.DEFINE_integer(
+    "num_train_steps", 1000,
+    "Total number of training steps to perform.")
+
+flags.DEFINE_integer(
+    "num_warmup_steps", 100,
+    "Number of steps to perform linear warmup.")
+
+flags.DEFINE_integer(
+    "save_checkpoints_steps", 2000,
+    "How often to save the model checkpoint.")
+
+flags.DEFINE_integer(
+    "max_eval_steps", 100,
+    "Maximum number of eval steps.")
+
+flags.DEFINE_bool(
+    "couple_encoder_decoder", False,
+    "Whether to tie encoder and decoder weights.")
+
+flags.DEFINE_integer(
+    "beam_size", 5,
+    "Beam size for decoding.")
+
+flags.DEFINE_float(
+    "alpha", 0.8,
+    "Strength of length normalization for beam search.")
+
+flags.DEFINE_float(
+    "label_smoothing", 0.1,
+    "Label smoothing for prediction cross entropy loss.")
 
 # TODO: implement reverse complement w/ lexicographical comparison
 
