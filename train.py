@@ -25,11 +25,6 @@ FLAGS(sys.argv)
 
 tf.enable_v2_behavior()
 
-# it keeps yelling at me about the flags
-# do i have to just define them all?
-# i think i should put this on the cluster
-
-# data_dir should probably be a parameter
 FLAGS.data_dir = "./data-tmp/"
 FLAGS.attention_type = "block_sparse"
 FLAGS.couple_encoder_decoder = True
@@ -41,15 +36,17 @@ FLAGS.num_train_steps = 10000
 FLAGS.attention_probs_dropout_prob = 0.0
 FLAGS.hidden_dropout_prob = 0.0
 FLAGS.use_gradient_checkpointing = True
-# idk if i need vocab_model_file at all? leaving it out for now
-#FLAGS.vocab_model_file = "gpt2"
+FLAGS.vocab_model_file = "8mers" # currently only option
 
-print(flags.as_dictionary())
+# config TODO:
+  # data_dir as command line parameter
+  # FLAGS.vocab_model_file --> always set to dna2vec location
+
 
 # Init params, model, config
 # I used to have a utils.BigBirdConfig() here but I prefer the flags, dropping that if possible
 
-config = flags.as_dictionary()
+config = pipelines.utils.flags_as_dictionary()
 
 with container.as_default():
     model = TransformerClusterModel(config)
@@ -81,8 +78,8 @@ def fwd_bwd(features, labels):
   return loss, llh, logits, pred_ids, grads
 
 # inspect at a few examples
-#for ex in dataset.take(3):
-#  print(ex)
+for ex in dataset.take(3):
+  print(ex)
 
 # check outputs
 #loss, llh, logits, pred_ids, grads = fwd_bwd(ex[0], ex[1])

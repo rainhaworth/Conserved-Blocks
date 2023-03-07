@@ -1,9 +1,10 @@
 # Reusable helper functions for impementing pipelines
 
 import os
+import sys
 import numpy as np
 import tensorflow as tf
-from dna2vec.dna2vec.multi_k_model import MultiKModel
+#from dna2vec.dna2vec.multi_k_model import MultiKModel
 from gensim.models import word2vec
 
 from pipelines.d2v_bigbird_base import TransformerClusterModel
@@ -114,6 +115,106 @@ flags.DEFINE_float(
 
 # TODO: implement reverse complement w/ lexicographical comparison
 
+# custom flags-to-dictionary function
+def flags_as_dictionary():
+    """Get current config from flag."""
+
+    # TODO: adjust size of vocab depending on kmer embedding
+    vocab_size = 65536
+
+    # Resolve vocab file location from hotword
+    if FLAGS.vocab_model_file == "8mers":
+        FLAGS.vocab_model_file = str(os.path.join(os.path.dirname(os.path.realpath(sys.argv[0])),
+                                                  'dna2vec/pretrained/dna2vec-8mer-only.w2v'))
+
+    config = {
+        # transformer basic configs
+        "attention_probs_dropout_prob": FLAGS.attention_probs_dropout_prob,
+        "hidden_act": FLAGS.hidden_act,
+        "hidden_dropout_prob": FLAGS.hidden_dropout_prob,
+        "hidden_size": FLAGS.hidden_size,
+        "initializer_range": FLAGS.initializer_range,
+        "intermediate_size": FLAGS.intermediate_size,
+        "max_position_embeddings": FLAGS.max_position_embeddings,
+        "num_attention_heads": FLAGS.num_attention_heads,
+        "num_hidden_layers": FLAGS.num_hidden_layers,
+        "type_vocab_size": FLAGS.type_vocab_size,
+        "scope": FLAGS.scope,
+        "use_bias": FLAGS.use_bias,
+        "rescale_embedding": FLAGS.rescale_embedding,
+        "use_gradient_checkpointing": FLAGS.use_gradient_checkpointing,
+        "vocab_model_file": FLAGS.vocab_model_file,
+        # sparse mask configs
+        "attention_type": FLAGS.attention_type,
+        "norm_type": FLAGS.norm_type,
+        "block_size": FLAGS.block_size,
+        "num_rand_blocks": FLAGS.num_rand_blocks,
+        # common bert configs
+        "data_dir": FLAGS.data_dir,
+        "output_dir": FLAGS.output_dir,
+        "init_checkpoint": FLAGS.init_checkpoint,
+        "max_encoder_length": FLAGS.max_encoder_length,
+        "substitute_newline": FLAGS.substitute_newline,
+        "do_train": FLAGS.do_train,
+        "do_eval": FLAGS.do_eval,
+        "do_export": FLAGS.do_export,
+        "train_batch_size": FLAGS.train_batch_size,
+        "eval_batch_size": FLAGS.eval_batch_size,
+        "optimizer": FLAGS.optimizer,
+        "learning_rate": FLAGS.learning_rate,
+        "num_train_steps": FLAGS.num_train_steps,
+        "num_warmup_steps": FLAGS.num_warmup_steps,
+        "save_checkpoints_steps": FLAGS.save_checkpoints_steps,
+        "weight_decay_rate": FLAGS.weight_decay_rate,
+        "optimizer_beta1": FLAGS.optimizer_beta1,
+        "optimizer_beta2": FLAGS.optimizer_beta2,
+        "optimizer_epsilon": FLAGS.optimizer_epsilon,
+        # TPU settings
+        "use_tpu": FLAGS.use_tpu,
+        "tpu_name": FLAGS.tpu_name,
+        "tpu_zone": FLAGS.tpu_zone,
+        "tpu_job_name": FLAGS.tpu_job_name,
+        "gcp_project": FLAGS.gcp_project,
+        "master": FLAGS.master,
+        "num_tpu_cores": FLAGS.num_tpu_cores,
+        "iterations_per_loop": FLAGS.iterations_per_loop,
+    }
+
+    # pretraining dedicated flags
+    if hasattr(FLAGS, "max_predictions_per_seq"):
+        config["max_predictions_per_seq"] = FLAGS.max_predictions_per_seq
+    if hasattr(FLAGS, "masked_lm_prob"):
+        config["masked_lm_prob"] = FLAGS.masked_lm_prob
+    if hasattr(FLAGS, "max_eval_steps"):
+        config["max_eval_steps"] = FLAGS.max_eval_steps
+    if hasattr(FLAGS, "preprocessed_data"):
+        config["preprocessed_data"] = FLAGS.preprocessed_data
+    if hasattr(FLAGS, "use_nsp"):
+        config["use_nsp"] = FLAGS.use_nsp
+
+    # classifier dedicated flags
+    if hasattr(FLAGS, "num_labels"):
+        config["num_labels"] = FLAGS.num_labels
+
+    # summarization dedicated flags
+    if hasattr(FLAGS, "max_decoder_length"):
+        config["max_decoder_length"] = FLAGS.max_decoder_length
+    if hasattr(FLAGS, "trainable_bias"):
+        config["trainable_bias"] = FLAGS.trainable_bias
+    if hasattr(FLAGS, "couple_encoder_decoder"):
+        config["couple_encoder_decoder"] = FLAGS.couple_encoder_decoder
+    if hasattr(FLAGS, "beam_size"):
+        config["beam_size"] = FLAGS.beam_size
+    if hasattr(FLAGS, "alpha"):
+        config["alpha"] = FLAGS.alpha
+    if hasattr(FLAGS, "label_smoothing"):
+        config["label_smoothing"] = FLAGS.label_smoothing
+
+    # calculate vocab
+    config["vocab_size"] = vocab_size
+
+    return config
+
 
 # Define input_fn_builder, modified from run_summarization.py
 # If this has issues, just double return everything
@@ -123,24 +224,33 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
 
     def _decode_record(record):
         """Decodes a record to a TensorFlow example."""
+        # old implementation:
+        """
         name_to_features = {
             "contig": tf.io.FixedLenFeature([], tf.string)
         }
         example = tf.io.parse_single_example(record, name_to_features)
         return example["contig"]
+        """
+        # new implementation, just opens file and extracts string:
+        # okay this is working properly
+        return tf.io.read_file(record)
 
     def _tokenize_contig(contig):
         # Initialize tokenizer
         # TODO: test whether tft.SentencepieceTokenizer can work with dna2vec somehow
             # I don't think so
         # Also is this being called repeatedly? I really hope not or I have to fix that
-        tokenizer = D2v8merTokenizer()
+        tokenizer = D2v8merTokenizer(vocab_model_file)
 
         # For this implementation, we use the same contig for input and output
+        print("tokenizing contig: ", contig)
         contig_ids = tokenizer.tokenize(contig)
         if isinstance(contig_ids, tf.RaggedTensor):
             contig_ids = contig_ids.to_tensor(0)
         contig_ids = contig_ids[:max_encoder_length]
+
+        print("tokenized: ", contig_ids)
 
         return contig_ids
 
@@ -151,21 +261,35 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
         # Load dataset from text files
         input_files = tf.io.gfile.glob(
             os.path.join(data_dir, "*.txt"))
+        
+        print("first input file: ", input_files[0])
 
         # For training, we want a lot of parallel reading and shuffling.
         # For eval, we want no shuffling and parallel reading doesn't matter.
         if is_training:
+            print("training")
             d = tf.data.Dataset.from_tensor_slices(tf.constant(input_files))
             d = d.shuffle(buffer_size=len(input_files))
 
             # Non deterministic mode means that the interleaving is not exact.
             # This adds even more randomness to the training pipeline.
-            d = d.interleave(tf.data.TFRecordDataset,
-                                deterministic=False,
-                                num_parallel_calls=tf.data.experimental.AUTOTUNE)
+            #d = d.interleave(tf.data.TFRecordDataset,
+            #                    deterministic=False,
+            #                    num_parallel_calls=tf.data.experimental.AUTOTUNE)
         else:
             d = tf.data.TFRecordDataset(input_files)
 
+        """
+        for ex in d.take(1):
+            print(ex)
+            decoded = _decode_record(ex)
+            tokenized = _tokenize_contig(decoded)
+            print(tokenized)
+        """
+
+        # _decode_record currently breaks b/c D2v8merTokenizer is expecting a string, not a TF example or whatever
+        # and i guess we don't really have a record but a bunch of text files
+        # commenting out for now, may try to get this working in the future if it's helpful
         d = d.map(_decode_record,
                 num_parallel_calls=tf.data.experimental.AUTOTUNE,
                 deterministic=is_training)
@@ -173,7 +297,7 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
         d = d.map(_tokenize_contig,
                     num_parallel_calls=tf.data.experimental.AUTOTUNE,
                     deterministic=is_training)
-
+        print("made it here, code breaks at padded_batch now lol")
         if is_training:
             d = d.shuffle(buffer_size=10000, reshuffle_each_iteration=True)
             d = d.repeat()
@@ -239,7 +363,7 @@ def model_fn_builder(transformer_config):
                 {"learning_rate": learning_rate}))
 
     elif mode == tf.estimator.ModeKeys.EVAL:
-        tokenizer = D2v8merTokenizer()
+        tokenizer = D2v8merTokenizer(transformer_config["vocab_model_file"])
 
         # TODO: define some kind of metric for evaluation, e.g. edit distance
         # Or I guess it would have to be alignment or something?
@@ -310,21 +434,38 @@ def loss_fn(logits, labels):
 
 # Define dna2vec tokenize/detokenize wrapper
 class D2v8merTokenizer():
-    def __init__(self):
-        # This makes it only work from the base directory (Conserved-Blocks)
-        # Maybe make the directory a parameter?
-        filepath = 'dna2vec/pretrained/dna2vec-8mer-only.w2v'
-        self.model = word2vec.KeyedVectors.load_word2vec_format(filepath, binary=False)
+    def __init__(self, filepath):
+        # read file, split into lines, and drop first and last line
+        vocab = tf.strings.split(tf.io.read_file(filepath), sep='\r\n')[1:-1]
+
+        # split into kmers and embedding table; convert embedding table to 2d float32 tensor and set shape
+        kmers = tf.strings.substr(vocab, 0, 8)
+        self.embed_table = tf.strings.split(tf.strings.substr(vocab, 9, 2000), ' ')
+        self.embed_table = tf.strings.to_number(self.embed_table, tf.float32)
+        self.embed_table = tf.reshape(self.embed_table, [65536, 100])
+
+        # make hashmap to convert kmers into ids
+        self.kmer_map = tf.lookup.StaticHashTable(
+            tf.lookup.KeyValueTensorInitializer(kmers, tf.range(65536)),
+            default_value=-1
+        )
+
     def tokenize(self, seq):
-        length = len(seq) - 8 + 1
-        embed = tf.zeros([length, 100])
-        for i in range(length): # - 8 + 1
-            embed[i] = self.model.vector(seq[i:i+8])
-        return np.array(embed)
+        # assume seq is a scalar tensor; TODO: check
+        if seq.shape != ():
+            raise ValueError("Expected scalar tensor, got ", seq)
+        # get number of kmers then decompose
+        num_kmers = tf.strings.length(seq) - 7
+        kmers = tf.strings.substr(seq, tf.range(num_kmers), tf.fill([num_kmers], 8))
+        # lookup ids
+        ids = self.kmer_map.lookup(kmers)
+        # return embedding
+        return tf.ragged.map_flat_values(tf.nn.embedding_lookup, self.embed_table, ids)
 
     def detokenize(self, embed):
         # The difficult part here is that there may be conflicts
         # TODO: handle those somehow
+        # also TODO: make this actually work lol, basically just re-implement similar_by_vector
         # For now, just fetch 8-mers
         seq = ''
         for i in range(0, embed.shape(0), 8):
