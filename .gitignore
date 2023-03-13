@@ -11,3 +11,8 @@ dna2vec/tox.ini
 
 bigbird/comparison.png
 bigbird/CONTRIBUTING.md
+
+*.ipynb
+*.egg-info
+**/__pycache__/
+data-*

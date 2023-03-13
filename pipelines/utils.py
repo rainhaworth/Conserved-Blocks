@@ -244,13 +244,10 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
         tokenizer = D2v8merTokenizer(vocab_model_file)
 
         # For this implementation, we use the same contig for input and output
-        print("tokenizing contig: ", contig)
         contig_ids = tokenizer.tokenize(contig)
         if isinstance(contig_ids, tf.RaggedTensor):
             contig_ids = contig_ids.to_tensor(0)
         contig_ids = contig_ids[:max_encoder_length]
-
-        print("tokenized: ", contig_ids)
 
         return contig_ids
 
@@ -262,12 +259,11 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
         input_files = tf.io.gfile.glob(
             os.path.join(data_dir, "*.txt"))
         
-        print("first input file: ", input_files[0])
+        #print("first input file: ", input_files[0])
 
         # For training, we want a lot of parallel reading and shuffling.
         # For eval, we want no shuffling and parallel reading doesn't matter.
         if is_training:
-            print("training")
             d = tf.data.Dataset.from_tensor_slices(tf.constant(input_files))
             d = d.shuffle(buffer_size=len(input_files))
 
@@ -297,11 +293,14 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
         d = d.map(_tokenize_contig,
                     num_parallel_calls=tf.data.experimental.AUTOTUNE,
                     deterministic=is_training)
-        print("made it here, code breaks at padded_batch now lol")
+        
         if is_training:
             d = d.shuffle(buffer_size=10000, reshuffle_each_iteration=True)
             d = d.repeat()
-        d = d.padded_batch(batch_size, ([max_encoder_length], [max_decoder_length]),
+        
+        # this originally had padded_shape = ([max_encoder_length], [max_decoder_length])
+        # but we're only returning one thing, so drop decoder length
+        d = d.padded_batch(batch_size, [max_encoder_length],
                             drop_remainder=True)  # For static shape
         return d
 
@@ -328,7 +327,7 @@ def model_fn_builder(transformer_config):
                                        training=is_training)
 
     # Use custom loss function
-    total_loss = loss_fn(logits, labels)
+    total_loss = padded_cross_entropy_loss(logits, labels)
 
     tvars = tf.compat.v1.trainable_variables()
     utils.log_variables(tvars, transformer_config["ckpt_var_list"])
@@ -428,12 +427,97 @@ def model_fn_builder(transformer_config):
 
   return model_fn
 
-# Define loss function
-def loss_fn(logits, labels):
-    return tf.nn.softmax_cross_entropy_with_logits(logits, labels)
+# from run_summarization.py
+# i was just omitting all the smoothing and stuff but i need to handle the padding
+def padded_cross_entropy_loss(logits, labels, smoothing, vocab_size):
+  """Calculate cross entropy loss while ignoring padding.
 
-# Define dna2vec tokenize/detokenize wrapper
+  Args:
+    logits: Tensor of size [batch_size, length_logits, vocab_size]
+    labels: Tensor of size [batch_size, length_labels]
+    smoothing: Label smoothing constant, used to determine the on and off values
+    vocab_size: int size of the vocabulary
+  Returns:
+    Returns the cross entropy loss and weight tensors: float32 tensors with
+      shape [batch_size, max(length_logits, length_labels)]
+  """
+  with tf.name_scope("loss"):
+
+    if labels is not None:
+      # Calculate smoothing cross entropy
+      with tf.name_scope("smoothing_cross_entropy"):
+        confidence = 1.0 - smoothing
+        vocab_float = tf.cast(vocab_size - 1, tf.float32)
+        low_confidence = (1.0 - confidence) / vocab_float
+        soft_targets = tf.one_hot(
+            labels,
+            depth=vocab_size,
+            on_value=confidence,
+            off_value=low_confidence)
+        xentropy = tf.nn.softmax_cross_entropy_with_logits(
+            logits=logits, labels=soft_targets)
+
+        # Calculate the best (lowest) possible value of cross entropy, and
+        # subtract from the cross entropy loss.
+        normalizing_constant = -(
+            confidence * tf.math.log(confidence) + vocab_float *
+            low_confidence * tf.math.log(low_confidence + 1e-20))
+        xentropy -= normalizing_constant
+
+      weights = tf.cast(tf.not_equal(labels, 0), tf.float32)
+      loss = tf.reduce_sum(xentropy) / tf.reduce_sum(weights)
+
+    else:
+      loss = tf.constant(0.0)
+
+    return loss
+
+# dna2vec tokenizer/detokenizer only
 class D2v8merTokenizer():
+    def __init__(self, filepath):
+        # read file, split into lines, and drop first and last line
+        vocab = tf.strings.split(tf.io.read_file(filepath), sep='\r\n')[1:-1]
+
+        # grab list of kmers
+        kmers = tf.strings.substr(vocab, 0, 8)
+        
+        # make hashmap to convert kmers into ids
+        # TODO: read in vocab size from file
+        self.kmers_to_ids = tf.lookup.StaticHashTable(
+            tf.lookup.KeyValueTensorInitializer(kmers, tf.range(65536)),
+            default_value=-1
+        )
+
+        # make reverse hashmap to convert ids back to kmers
+        self.ids_to_kmers = tf.lookup.StaticHashTable(
+            tf.lookup.KeyValueTensorInitializer(tf.range(65536), kmers),
+            default_value='NNNNNNNN'
+        )
+
+    def tokenize(self, seq):
+        if seq.shape != ():
+            raise ValueError("Expected scalar tensor, got ", seq)
+        # get number of kmers then decompose
+        num_kmers = tf.strings.length(seq) - 7
+        kmers = tf.strings.substr(seq, tf.range(num_kmers), tf.fill([num_kmers], 8))
+        # return ids
+        return self.kmers_to_ids.lookup(kmers)
+
+    def detokenize(self, ids):
+        # reconstruct sequence from kmers
+        # the difficult part here is that there might be conflicts between kmers
+        # TODO: handle those somehow
+            # idea: use kmers to select nucleotide at each index with highest support
+            # e.g. if there are 2 overlapping kmers, pick randomly
+                # if there are 5 = [A,C,A,G,T], pick A
+                # if there are 8 = [A,A,A,C,C,C,G,T], pick randomly between A and C
+        kmers = self.ids_to_kmers.lookup(ids)
+        # for now, just literally join all the kmers
+        return tf.strings.reduce_join(kmers)
+
+# dna2vec tokenize/detokenize wrapper with embeddings
+# TODO: make this work and possibly convert into EmbeddingLayer
+class D2v8merTokenizerEmbeder():
     def __init__(self, filepath):
         # read file, split into lines, and drop first and last line
         vocab = tf.strings.split(tf.io.read_file(filepath), sep='\r\n')[1:-1]

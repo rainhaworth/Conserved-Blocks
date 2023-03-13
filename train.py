@@ -72,18 +72,18 @@ def fwd_bwd(features, labels):
   with tf.GradientTape() as g:
     (llh, logits, pred_ids), _ = model(features, target_ids=labels,
                                        training=True)
-    loss = pipelines.utils.loss_fn(
-        logits, labels) # Include transformer config if needed
+    loss = pipelines.utils.padded_cross_entropy_loss(
+      logits, labels, 
+      config["label_smoothing"], config["vocab_size"])
   grads = g.gradient(loss, model.trainable_weights)
   return loss, llh, logits, pred_ids, grads
 
 # inspect at a few examples
 for ex in dataset.take(3):
   print(ex)
-
-# check outputs
-#loss, llh, logits, pred_ids, grads = fwd_bwd(ex[0], ex[1])
-#print('Loss: ', loss)
+  # check outputs
+  #loss, llh, logits, pred_ids, grads = fwd_bwd(ex, ex)
+  #print('Loss: ', loss)
 
 # see ipynb if loading pretrained
 
@@ -91,10 +91,9 @@ for ex in dataset.take(3):
 opt = tf.keras.optimizers.Adam(FLAGS.learning_rate)
 train_loss = tf.keras.metrics.Mean(name='train_loss')
 
-# NOTE: the ex[0] and ex[1] should break; if the point of failure is here, change both to ex or ex[0]
-  # but if the point of failure is somewhere in input_fn_builder, we can change that instead
 for i, ex in enumerate(tqdm(dataset.take(FLAGS.num_train_steps), position=0)):
-  loss, llh, logits, pred_ids, grads = fwd_bwd(ex[0], ex[1])
+  # ex, ex instead of ex[0], ex[1] since we only have one set of ids
+  loss, llh, logits, pred_ids, grads = fwd_bwd(ex, ex)
   opt.apply_gradients(zip(grads, model.trainable_weights))
   train_loss(loss)
   if i% 10 == 0:
