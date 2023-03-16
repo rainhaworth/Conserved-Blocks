@@ -5,7 +5,7 @@ import sys
 import numpy as np
 import tensorflow as tf
 #from dna2vec.dna2vec.multi_k_model import MultiKModel
-from gensim.models import word2vec
+#from gensim.models import word2vec
 
 from pipelines.d2v_bigbird_base import TransformerClusterModel
 
@@ -426,6 +426,39 @@ def model_fn_builder(transformer_config):
     return output_spec
 
   return model_fn
+
+def serving_input_fn_builder(batch_size, max_encoder_length,
+                             vocab_model_file):
+  """Creates an `input_fn` closure for exported SavedModel."""
+  def dynamic_padding(inp, min_size):
+    pad_size = tf.maximum(min_size - tf.shape(inp)[1], 0)
+    paddings = [[0, 0], [0, pad_size]]
+    return tf.pad(inp, paddings)
+
+  def input_fn():
+    # sequence input
+    seq = tf.compat.v1.placeholder(tf.string, [batch_size], name="input_seq")
+
+    # tokenize sequence
+    tokenizer = D2v8merTokenizer(vocab_model_file)
+    ids = tokenizer.tokenize(seq)
+    if isinstance(ids, tf.RaggedTensor):
+      ids = ids.to_tensor(0)
+
+    # padding: Pad only if necessary and reshape properly
+    # TODO: fix this part
+    # actually it might work fine bc it's expecting only one set of ids
+    # TODO: see if this part needs to be fixed
+    padded_ids = dynamic_padding(ids, max_encoder_length)
+    ids = tf.slice(padded_ids, [0, 0], [batch_size, max_encoder_length])
+
+    receiver_tensors = {"input": seq}
+    features = {"input_ids": tf.cast(ids, tf.int32, name="input_ids")}
+
+    return tf.estimator.export.ServingInputReceiver(
+        features=features, receiver_tensors=receiver_tensors)
+
+  return input_fn
 
 # from run_summarization.py
 # i was just omitting all the smoothing and stuff but i need to handle the padding
