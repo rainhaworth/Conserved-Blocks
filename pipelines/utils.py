@@ -4,6 +4,8 @@ import os
 import sys
 import numpy as np
 import tensorflow as tf
+from absl import logging
+import json
 #from dna2vec.dna2vec.multi_k_model import MultiKModel
 #from gensim.models import word2vec
 
@@ -215,7 +217,6 @@ def flags_as_dictionary():
 
     return config
 
-
 # Define input_fn_builder, modified from run_summarization.py
 # If this has issues, just double return everything
 def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
@@ -249,7 +250,7 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
             contig_ids = contig_ids.to_tensor(0)
         contig_ids = contig_ids[:max_encoder_length]
 
-        return contig_ids
+        return contig_ids, contig_ids
 
     def input_fn(params):
         """The actual input function."""
@@ -269,9 +270,9 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
 
             # Non deterministic mode means that the interleaving is not exact.
             # This adds even more randomness to the training pipeline.
-            #d = d.interleave(tf.data.TFRecordDataset,
-            #                    deterministic=False,
-            #                    num_parallel_calls=tf.data.experimental.AUTOTUNE)
+            d = d.interleave(tf.data.TFRecordDataset,
+                                deterministic=False,
+                                num_parallel_calls=tf.data.experimental.AUTOTUNE)
         else:
             d = tf.data.TFRecordDataset(input_files)
 
@@ -300,7 +301,7 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
         
         # this originally had padded_shape = ([max_encoder_length], [max_decoder_length])
         # but we're only returning one thing, so drop decoder length
-        d = d.padded_batch(batch_size, [max_encoder_length],
+        d = d.padded_batch(batch_size, ([max_encoder_length], [max_decoder_length]),
                             drop_remainder=True)  # For static shape
         return d
 
@@ -326,8 +327,11 @@ def model_fn_builder(transformer_config):
     (llh, logits, pred_ids), _ = model(features, target_ids=labels,
                                        training=is_training)
 
-    # Use custom loss function
-    total_loss = padded_cross_entropy_loss(logits, labels)
+    # idk how this was working without them before but we need the smoothing and vocab size vars
+    total_loss = padded_cross_entropy_loss(
+        logits, labels,
+        transformer_config["label_smoothing"],
+        transformer_config["vocab_size"])
 
     tvars = tf.compat.v1.trainable_variables()
     utils.log_variables(tvars, transformer_config["ckpt_var_list"])
@@ -639,6 +643,22 @@ class D2vKmerEmbeddingLayer(tf.keras.layers.Layer):
         with tf.compat.v1.name_scope("presoftmax_linear"):
             logits = tf.tensordot(x, self.word_embeddings, [[-1], [1]])
         return logits
+
+# custom flag save function
+def save_flags(path):
+  """Save current flag config."""
+  config = flags_as_dictionary()
+  with tf.io.gfile.GFile(path, "w") as f:
+    json.dump(config, f, indent=4, sort_keys=True)
+
+  # log flags
+  max_len = max([len(ii) for ii in config.keys()])
+  fmt_string = "\t%" + str(max_len) + "s : %s"
+  logging.info("Arguments:")
+  for key, value in sorted(config.items()):
+    logging.info(fmt_string, key, value)
+
+  return config
 
 # TODO: vector-based clustering
 # god why is this so fucking hard

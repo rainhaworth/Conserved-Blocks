@@ -42,9 +42,11 @@ FLAGS.hidden_dropout_prob = 0.0
 FLAGS.use_gradient_checkpointing = True
 FLAGS.vocab_model_file = "8mers" # currently only option
 FLAGS.hidden_size = 384 # must cleanly divide 768
+FLAGS.train_batch_size = 1
 FLAGS.eval_batch_size = 1 # only used by estimator
 FLAGS.do_eval = True
 FLAGS.do_export = True
+FLAGS.label_smoothing = 0.0 # imo it doesn't make sense to use label smoothing atm
 
 # old implementation
 """
@@ -139,14 +141,14 @@ print('Log Likelihood = {}'.format(eval_llh.result().numpy()))
 # then detokenize pred_ids
 """
 
-# from run_summarization.py
+# from run_summarization.py, modified to use functions from pipelines.utils
 def main(_):
   
   if not FLAGS.do_train and not FLAGS.do_eval and not FLAGS.do_export:
     raise ValueError(
         "At least one of `do_train`, `do_eval` must be True.")
 
-  transformer_config = flags.as_dictionary()
+  transformer_config = pipelines.utils.flags_as_dictionary()
 
   if FLAGS.max_encoder_length > transformer_config["max_position_embeddings"]:
     raise ValueError(
@@ -157,7 +159,7 @@ def main(_):
 
   tf.io.gfile.makedirs(FLAGS.output_dir)
   if FLAGS.do_train:
-    flags.save(os.path.join(FLAGS.output_dir, "summarization.config"))
+    pipelines.utils.save_flags(os.path.join(FLAGS.output_dir, "summarization.config"))
 
   model_fn = pipelines.utils.model_fn_builder(transformer_config)
   estimator = utils.get_estimator(transformer_config, model_fn)
