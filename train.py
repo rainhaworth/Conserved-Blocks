@@ -18,8 +18,8 @@ import time
 
 # from pubmed.ipynb: create container
 # not sure what it does but it somehow, um, contains the model
-#from tensorflow.python.ops.variable_scope import EagerVariableStore
-#container = EagerVariableStore()
+from tensorflow.python.ops.variable_scope import EagerVariableStore
+container = EagerVariableStore()
 
 # Set flags, slightly modified from pumbed.ipynb
 FLAGS = flags.FLAGS
@@ -41,15 +41,14 @@ FLAGS.attention_probs_dropout_prob = 0.0
 FLAGS.hidden_dropout_prob = 0.0
 FLAGS.use_gradient_checkpointing = True
 FLAGS.vocab_model_file = "8mers" # currently only option
-FLAGS.hidden_size = 384 # must cleanly divide 768
-FLAGS.train_batch_size = 1
-FLAGS.eval_batch_size = 1 # only used by estimator
+FLAGS.hidden_size = 96 # must cleanly divide 768
+FLAGS.train_batch_size = 4
+FLAGS.eval_batch_size = 4 # only used by estimator
 FLAGS.do_eval = True
 FLAGS.do_export = True
 FLAGS.label_smoothing = 0.0 # imo it doesn't make sense to use label smoothing atm
 
-# old implementation
-"""
+# 
 # Init params, model, config
 # I used to have a utils.BigBirdConfig() here but I prefer the flags, dropping that if possible
 
@@ -66,7 +65,7 @@ train_input_fn = pipelines.utils.input_fn_builder(
     max_decoder_length=FLAGS.max_decoder_length,
     is_training=True)
 # set as large as possible; at current hidden size, can't go above 1
-dataset = train_input_fn({'batch_size': 1})
+dataset = train_input_fn({'batch_size': 4})
 
 model_fn = pipelines.utils.model_fn_builder(flags)
 
@@ -82,6 +81,9 @@ def fwd_bwd(features, labels):
   grads = g.gradient(loss, model.trainable_weights)
   return loss, llh, logits, pred_ids, grads
 
+# Create output directory
+tf.io.gfile.makedirs(FLAGS.output_dir)
+
 # Train model
 opt = tf.keras.optimizers.Adam(FLAGS.learning_rate)
 train_loss = tf.keras.metrics.Mean(name='train_loss')
@@ -91,14 +93,19 @@ for i, ex in enumerate(tqdm(dataset.take(FLAGS.num_train_steps), position=0)):
   loss, llh, logits, pred_ids, grads = fwd_bwd(ex, ex)
   opt.apply_gradients(zip(grads, model.trainable_weights))
   train_loss(loss)
-  if i% 10 == 0:
+  if i % 10 == 0:
     print('Loss = {} '.format(train_loss.result().numpy()))
+  if i % 100 == 0:
+    out_path = os.path.join(FLAGS.output_dir, 'epoch-' + str(i) + '.ckpt')
+    model.save_weights(out_path)
+    print("Saved weights to", out_path)
 
-print("Training done. Saving Model.")
+#print("Training done. Saving Model.")
 
 # TODO: figure out if this works or i also have to use it for training
 # i think i do honestly. exporting a saved model is a huge pain otherwise so i also can't easily rewrite.
-tf.io.gfile.makedirs(FLAGS.output_dir)
+
+"""
 if FLAGS.do_train:
   flags.save(os.path.join(FLAGS.output_dir, "summarization.config"))
 estimator = utils.get_estimator(config, model_fn)
@@ -111,8 +118,8 @@ serving_input_fn = pipelines.utils.serving_input_fn_builder(
 
 estimator.export_saved_model(
     os.path.join(FLAGS.output_dir, "export"), serving_input_fn)
-
-print("Model saved. Evaluating.")
+"""
+print("Training complete. Evaluating.")
 
 # forward pass only for eval
 @tf.function(experimental_compile=True)
@@ -139,11 +146,13 @@ print('Log Likelihood = {}'.format(eval_llh.result().numpy()))
 # to get predictions, call:
 #_, _, pred_ids = fwd_only(ex[0], ex[1])
 # then detokenize pred_ids
-"""
 
+
+# TPUEstimator implementation
 # from run_summarization.py, modified to use functions from pipelines.utils
+# this seems to mysteriously freeze, so i'm reverting to the old implementation
 def main(_):
-  
+  """
   if not FLAGS.do_train and not FLAGS.do_eval and not FLAGS.do_export:
     raise ValueError(
         "At least one of `do_train`, `do_eval` must be True.")
@@ -226,8 +235,9 @@ def main(_):
 
     estimator.export_saved_model(
         os.path.join(FLAGS.output_dir, "export"), serving_input_fn)
+    """
 
 if __name__ == '__main__':
-  tf.compat.v1.disable_v2_behavior()
+  #tf.compat.v1.disable_v2_behavior()
   tf.compat.v1.enable_resource_variables()
   app.run(main)
