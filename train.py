@@ -3,11 +3,11 @@
 import pipelines.utils
 from pipelines.d2v_bigbird_base import TransformerClusterModel
 
-from bigbird.core import utils
+#from bigbird.core import utils
 #from bigbird.core import modeling
 from bigbird.core import flags
 
-from absl import app, logging
+from absl import app #, logging
 
 import tensorflow.compat.v2 as tf
 from tqdm import tqdm
@@ -21,7 +21,7 @@ import time
 from tensorflow.python.ops.variable_scope import EagerVariableStore
 container = EagerVariableStore()
 
-# Set flags, slightly modified from pumbed.ipynb
+# set flags, slightly modified from pumbed.ipynb
 FLAGS = flags.FLAGS
 if not hasattr(FLAGS, "f"): flags.DEFINE_string("f", "", "")
 FLAGS(sys.argv)
@@ -42,22 +42,21 @@ FLAGS.hidden_dropout_prob = 0.0
 FLAGS.use_gradient_checkpointing = True
 FLAGS.vocab_model_file = "8mers" # currently only option
 FLAGS.hidden_size = 96 # must cleanly divide 768
-FLAGS.train_batch_size = 4
-FLAGS.eval_batch_size = 4 # only used by estimator
-FLAGS.do_eval = True
-FLAGS.do_export = True
 FLAGS.label_smoothing = 0.0 # imo it doesn't make sense to use label smoothing atm
 
-# 
-# Init params, model, config
-# I used to have a utils.BigBirdConfig() here but I prefer the flags, dropping that if possible
+# only used by TPUEstimator implementation
+FLAGS.train_batch_size = 4 
+FLAGS.eval_batch_size = 4 
+FLAGS.do_eval = True
+FLAGS.do_export = True
 
+# finalize config, create model
 config = pipelines.utils.flags_as_dictionary()
 
 with container.as_default():
     model = TransformerClusterModel(config)
 
-# Call input and model function builders
+# call input and model function builders
 train_input_fn = pipelines.utils.input_fn_builder(
     data_dir=FLAGS.data_dir,
     vocab_model_file=FLAGS.vocab_model_file,
@@ -67,9 +66,7 @@ train_input_fn = pipelines.utils.input_fn_builder(
 # set as large as possible; at current hidden size, can't go above 1
 dataset = train_input_fn({'batch_size': 4})
 
-model_fn = pipelines.utils.model_fn_builder(flags)
-
-# training w/ backpropogation
+# define training function w/ backpropogation
 @tf.function(experimental_compile=True)
 def fwd_bwd(features, labels):
   with tf.GradientTape() as g:
@@ -81,13 +78,16 @@ def fwd_bwd(features, labels):
   grads = g.gradient(loss, model.trainable_weights)
   return loss, llh, logits, pred_ids, grads
 
-# Create output directory
+# create output directory
 tf.io.gfile.makedirs(FLAGS.output_dir)
 
-# Train model
+# save flags
+if FLAGS.do_train:
+  flags.save(os.path.join(FLAGS.output_dir, "summarization.config"))
+
+# train model
 opt = tf.keras.optimizers.Adam(FLAGS.learning_rate)
 train_loss = tf.keras.metrics.Mean(name='train_loss')
-
 for i, ex in enumerate(tqdm(dataset.take(FLAGS.num_train_steps), position=0)):
   # ex, ex instead of ex[0], ex[1] since we only have one set of ids
   loss, llh, logits, pred_ids, grads = fwd_bwd(ex, ex)
@@ -100,28 +100,9 @@ for i, ex in enumerate(tqdm(dataset.take(FLAGS.num_train_steps), position=0)):
     model.save_weights(out_path)
     print("Saved weights to", out_path)
 
-#print("Training done. Saving Model.")
-
-# TODO: figure out if this works or i also have to use it for training
-# i think i do honestly. exporting a saved model is a huge pain otherwise so i also can't easily rewrite.
-
-"""
-if FLAGS.do_train:
-  flags.save(os.path.join(FLAGS.output_dir, "summarization.config"))
-estimator = utils.get_estimator(config, model_fn)
-tmp_data_dir = os.path.join(FLAGS.output_dir, "tfds")
-
-serving_input_fn = pipelines.utils.serving_input_fn_builder( 
-    batch_size=FLAGS.eval_batch_size,
-    vocab_model_file=FLAGS.vocab_model_file,
-    max_encoder_length=FLAGS.max_encoder_length)
-
-estimator.export_saved_model(
-    os.path.join(FLAGS.output_dir, "export"), serving_input_fn)
-"""
 print("Training complete. Evaluating.")
 
-# forward pass only for eval
+# define forward pass only for eval
 @tf.function(experimental_compile=True)
 def fwd_only(features, labels):
   (llh, logits, pred_ids), _ = model(features, target_ids=labels,
