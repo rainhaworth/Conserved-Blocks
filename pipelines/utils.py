@@ -254,11 +254,14 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
         # Load dataset from text files
         input_files = tf.io.gfile.glob(
             os.path.join(data_dir, "*.txt"))
+        
+        # because we aren't using a TFRecord, this needs to happen whether we're training or not
+        # otherwise, it would be in the is_training block
+        d = tf.data.Dataset.from_tensor_slices(tf.constant(input_files))
 
         # For training, we want a lot of parallel reading and shuffling.
         # For eval, we want no shuffling and parallel reading doesn't matter.
         if is_training:
-            d = tf.data.Dataset.from_tensor_slices(tf.constant(input_files))
             d = d.shuffle(buffer_size=len(input_files))
 
             # Non deterministic mode means that the interleaving is not exact.
@@ -266,8 +269,10 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
             #d = d.interleave(tf.data.TFRecordDataset,
             #                    deterministic=False,
             #                    num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        else:
-            d = tf.data.TFRecordDataset(input_files)
+
+        # this breaks everything unless we convert to TFRecord
+        #else:
+        #    d = tf.data.TFRecordDataset(input_files)
 
         d = d.map(_decode_record,
                 num_parallel_calls=tf.data.experimental.AUTOTUNE,
@@ -644,3 +649,4 @@ def save_flags(path):
   return config
 
 # TODO: add anything needed for clustering
+# so far it all seems fine in cluster-eval.py but it might be best to add a dedicated layer or smth

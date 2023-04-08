@@ -51,8 +51,8 @@ FLAGS.label_smoothing = 0.0 # imo it doesn't make sense to use label smoothing a
 # these settings allow us to use batch_size = 2, cutting training time in half
 FLAGS.hidden_size = 384 # must cleanly divide 768
 FLAGS.intermediate_size = 1536
-#FLAGS.num_hidden_layers = 6
-FLAGS.num_attention_heads = 6
+FLAGS.num_hidden_layers = 6
+#FLAGS.num_attention_heads = 6
 
 # only used by TPUEstimator implementation
 FLAGS.train_batch_size = 4 
