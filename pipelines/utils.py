@@ -2,16 +2,14 @@
 
 import os
 import sys
-import numpy as np
+#import numpy as np
 import tensorflow as tf
 from absl import logging
 import json
-#from dna2vec.dna2vec.multi_k_model import MultiKModel
-#from gensim.models import word2vec
 
 from pipelines.d2v_bigbird_base import TransformerClusterModel
 
-from bigbird.core import modeling
+#from bigbird.core import modeling
 from bigbird.core import utils
 from bigbird.core import optimization
 from bigbird.core import flags
@@ -233,24 +231,21 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
         example = tf.io.parse_single_example(record, name_to_features)
         return example["contig"]
         """
-        # new implementation, just opens file and extracts string:
-        # okay this is working properly
+        # we aren't working with TFRecord data, so simply read file
         return tf.io.read_file(record)
 
     def _tokenize_contig(contig):
-        # Initialize tokenizer
-        # TODO: test whether tft.SentencepieceTokenizer can work with dna2vec somehow
-            # I don't think so
-        # Also is this being called repeatedly? I really hope not or I have to fix that
+        # initialize tokenizer
         tokenizer = D2v8merTokenizer(vocab_model_file)
 
-        # For this implementation, we use the same contig for input and output
+        # use the same contig for input and output
         contig_ids = tokenizer.tokenize(contig)
         if isinstance(contig_ids, tf.RaggedTensor):
             contig_ids = contig_ids.to_tensor(0)
         contig_ids = contig_ids[:max_encoder_length]
 
-        return contig_ids, contig_ids
+        # ideally, avoid returning the same thing twice
+        return contig_ids#, contig_ids
 
     def input_fn(params):
         """The actual input function."""
@@ -259,8 +254,6 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
         # Load dataset from text files
         input_files = tf.io.gfile.glob(
             os.path.join(data_dir, "*.txt"))
-        
-        #print("first input file: ", input_files[0])
 
         # For training, we want a lot of parallel reading and shuffling.
         # For eval, we want no shuffling and parallel reading doesn't matter.
@@ -270,23 +263,12 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
 
             # Non deterministic mode means that the interleaving is not exact.
             # This adds even more randomness to the training pipeline.
-            d = d.interleave(tf.data.TFRecordDataset,
-                                deterministic=False,
-                                num_parallel_calls=tf.data.experimental.AUTOTUNE)
+            #d = d.interleave(tf.data.TFRecordDataset,
+            #                    deterministic=False,
+            #                    num_parallel_calls=tf.data.experimental.AUTOTUNE)
         else:
             d = tf.data.TFRecordDataset(input_files)
 
-        """
-        for ex in d.take(1):
-            print(ex)
-            decoded = _decode_record(ex)
-            tokenized = _tokenize_contig(decoded)
-            print(tokenized)
-        """
-
-        # _decode_record currently breaks b/c D2v8merTokenizer is expecting a string, not a TF example or whatever
-        # and i guess we don't really have a record but a bunch of text files
-        # commenting out for now, may try to get this working in the future if it's helpful
         d = d.map(_decode_record,
                 num_parallel_calls=tf.data.experimental.AUTOTUNE,
                 deterministic=is_training)
@@ -301,13 +283,14 @@ def input_fn_builder(data_dir, vocab_model_file, max_encoder_length,
         
         # this originally had padded_shape = ([max_encoder_length], [max_decoder_length])
         # but we're only returning one thing, so drop decoder length
-        d = d.padded_batch(batch_size, ([max_encoder_length], [max_decoder_length]),
+        d = d.padded_batch(batch_size, [max_encoder_length],
                             drop_remainder=True)  # For static shape
         return d
 
     return input_fn
 
-# Define model_fn_builder, modified from run_summarization.py
+# define model_fn_builder, modified from run_summarization.py
+# NOTE: unused in current implementation
 def model_fn_builder(transformer_config):
   """Returns `model_fn` closure for TPUEstimator."""
 
@@ -660,8 +643,4 @@ def save_flags(path):
 
   return config
 
-# TODO: vector-based clustering
-# god why is this so fucking hard
-# okay i guess i'll just try to implement like, whichever one is the easiest. probably k-means.
-# then i need a function to find the centroid.
-# maybe test everything else first?
+# TODO: add anything needed for clustering

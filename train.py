@@ -9,12 +9,16 @@ from bigbird.core import flags
 
 from absl import app #, logging
 
-import tensorflow.compat.v2 as tf
+#import tensorflow.compat.v2 as tf
+import tensorflow as tf
 from tqdm import tqdm
 
 import sys
 import os
 import time
+
+# alright whatever i'm gonna store things myself watch this
+import pickle
 
 # from pubmed.ipynb: create container
 # not sure what it does but it somehow, um, contains the model
@@ -26,7 +30,7 @@ FLAGS = flags.FLAGS
 if not hasattr(FLAGS, "f"): flags.DEFINE_string("f", "", "")
 FLAGS(sys.argv)
 
-#tf.enable_v2_behavior()
+tf.enable_v2_behavior()
 
 FLAGS.data_dir = "/fs/nexus-scratch/rhaworth/hmp-mini/"
 FLAGS.output_dir = "/fs/nexus-scratch/rhaworth/output/"
@@ -41,8 +45,14 @@ FLAGS.attention_probs_dropout_prob = 0.0
 FLAGS.hidden_dropout_prob = 0.0
 FLAGS.use_gradient_checkpointing = True
 FLAGS.vocab_model_file = "8mers" # currently only option
-FLAGS.hidden_size = 96 # must cleanly divide 768
 FLAGS.label_smoothing = 0.0 # imo it doesn't make sense to use label smoothing atm
+
+# regulate architecture size / memory usage
+# these settings allow us to use batch_size = 2, cutting training time in half
+FLAGS.hidden_size = 384 # must cleanly divide 768
+FLAGS.intermediate_size = 1536
+#FLAGS.num_hidden_layers = 6
+FLAGS.num_attention_heads = 6
 
 # only used by TPUEstimator implementation
 FLAGS.train_batch_size = 4 
@@ -63,11 +73,11 @@ train_input_fn = pipelines.utils.input_fn_builder(
     max_encoder_length=FLAGS.max_encoder_length,
     max_decoder_length=FLAGS.max_decoder_length,
     is_training=True)
-# set as large as possible; at current hidden size, can't go above 1
-dataset = train_input_fn({'batch_size': 4})
+# set as large as possible, limited by memory
+dataset = train_input_fn({'batch_size': 2})
 
 # define training function w/ backpropogation
-@tf.function(experimental_compile=True)
+@tf.function(experimental_compile=True, reduce_retracing=True)
 def fwd_bwd(features, labels):
   with tf.GradientTape() as g:
     (llh, logits, pred_ids), _ = model(features, target_ids=labels,
@@ -83,7 +93,7 @@ tf.io.gfile.makedirs(FLAGS.output_dir)
 
 # save flags
 if FLAGS.do_train:
-  flags.save(os.path.join(FLAGS.output_dir, "summarization.config"))
+  pipelines.utils.save_flags(os.path.join(FLAGS.output_dir, "summarization.config"))
 
 # train model
 opt = tf.keras.optimizers.Adam(FLAGS.learning_rate)
@@ -95,10 +105,17 @@ for i, ex in enumerate(tqdm(dataset.take(FLAGS.num_train_steps), position=0)):
   train_loss(loss)
   if i % 10 == 0:
     print('Loss = {} '.format(train_loss.result().numpy()))
-  if i % 100 == 0:
-    out_path = os.path.join(FLAGS.output_dir, 'epoch-' + str(i) + '.ckpt')
-    model.save_weights(out_path)
+  if i % 100 == 0 and i != 0:
+    out_path = os.path.join(FLAGS.output_dir, 'epoch-' + str(i) + '.pickle')
+    with open(out_path, 'wb') as f:
+      pickle.dump(model.get_weights(), f)
     print("Saved weights to", out_path)
+
+# final save
+out_path = os.path.join(FLAGS.output_dir, 'epoch-last.pickle')
+with open(out_path, 'wb') as f:
+  pickle.dump(model.get_weights(), f)
+print("Saved weights to", out_path)
 
 print("Training complete. Evaluating.")
 
@@ -115,7 +132,7 @@ eval_input_fn = pipelines.utils.input_fn_builder(
         max_encoder_length=FLAGS.max_encoder_length,
         max_decoder_length=FLAGS.max_decoder_length,
         is_training=False)
-eval_dataset = eval_input_fn({'batch_size': 8})
+eval_dataset = eval_input_fn({'batch_size': 2})
 
 eval_llh = tf.keras.metrics.Mean(name='eval_llh')
 
