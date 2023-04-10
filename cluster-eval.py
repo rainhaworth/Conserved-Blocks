@@ -112,16 +112,16 @@ for ex in tqdm(dataset.take(k), position=0):
   else:
     centroids = tf.concat([centroids, ex], 0)
 
-# check initial centroids
-print(centroids)
+# check initial centroid shape
 print(centroids.shape)
 
 # run k-means training
-# TODO: figure out if we should move some of this to an @tf.function()
+# TODO: figure out if we should move some of this to a new @tf.function()
 # (add 1 to take() to ensure we run the last batch)
 for i, ex in enumerate(tqdm(dataset.take(2*mini_batch_scale*iterations + 1), position=0)):
   if i % mini_batch_scale == 0:
     if i != 0:
+      print("iteration", i / mini_batch_scale)
       # calculate Euclidean distance between each row in buffer and each centroid
       centroid_dists = tf.norm(
         tf.reshape(buffer, (1, mini_batch_scale*2, FLAGS.max_encoder_length, FLAGS.hidden_size)) -
@@ -138,11 +138,17 @@ for i, ex in enumerate(tqdm(dataset.take(2*mini_batch_scale*iterations + 1), pos
         # get cluster members, remove the 2nd axis that it adds for some reason
         cluster_members = tf.squeeze(tf.gather(buffer, tf.where(tf.equal(nearest_centroids, i)), axis=0), axis=1)
         # get current centroid, add axis for concat
+        # including the current centroid in the mean gives it some weight when very few similar data points are present
         centroid = tf.reshape(tf.gather(centroids, i), [1, FLAGS.max_encoder_length, FLAGS.hidden_size])
         
         # compute new centroid, add to list
         new_centroid = tf.math.reduce_mean(tf.concat([cluster_members, centroid], 0), axis=0)
         new_centroids.append(new_centroid)
+
+        # compute cluster distance
+        print("mean distance for cluster", i, "=", tf.math.reduce_mean(
+          tf.norm(cluster_members - centroid, ord='euclidean', axis=[1,2])
+        ))
       
       # update centroid tensor
       centroids = tf.stack(new_centroids)
@@ -152,7 +158,15 @@ for i, ex in enumerate(tqdm(dataset.take(2*mini_batch_scale*iterations + 1), pos
     # if we haven't reached the desired batch size, populate buffer
     buffer = tf.concat([buffer, embed_only(ex)], 0)
     
-    
+# record centroids to file
+with open(os.path.join(FLAGS.output_dir, 'centroids.pickle'), 'wb') as f:
+  pickle.dump(centroids)
+
+
+# TODO:
+  # decode centroids into sequences, see how well that even goes
+  # traverse dataset and get list of points closest to each cluster, record those to file
+    # possibly add yet another file that does that
 
 
 # TODO: write a script to convert to TFRecord instead of whatever hack i'm doing
