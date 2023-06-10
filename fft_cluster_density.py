@@ -73,7 +73,7 @@ for i in tqdm(range(len(seqs)), 'constructing neighbor graph'):
             print(xcorr, i, j)
             max_corr = xcorr
         if xcorr / max_corr >= epsilon:
-            # update both parts of graphgraph
+            # update both parts of graph
             graph[i].add(j)
             graph[j].add(i)
 

@@ -538,7 +538,7 @@ class D2v8merTokenizer():
                 # if there are 8 = [A,A,A,C,C,C,G,T], pick randomly between A and C
         kmers = self.ids_to_kmers.lookup(ids)
         # for now, just literally join all the kmers
-        return tf.strings.reduce_join(kmers)
+        return kmers
 
 # dna2vec tokenize/detokenize wrapper with embeddings
 # TODO: make this work and possibly convert into EmbeddingLayer

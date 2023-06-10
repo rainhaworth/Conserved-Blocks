@@ -105,7 +105,10 @@ for id in cluster_ids:
         nucleotide_support.append(scores[max] / len(seq_strs))
 
     # (4) print
-    # TODO: (optionally) prune string when support falls below a threshold
-    # TODO: (optionally) write supports in fastq format
     print(block_str)
     print(nucleotide_support)
+
+    # write to pickle file
+    with open(os.path.join(out_dir, 'block_cluster_' + str(id) + '.pickle'), 'wb') as f:
+        tup = (block_str, nucleotide_support)
+        pickle.dump(tup, f)

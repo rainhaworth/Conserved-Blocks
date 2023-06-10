@@ -11,12 +11,13 @@ from pipelines.d2v_bigbird_base import TransformerClusterModel
 
 #from bigbird.core import utils
 #from bigbird.core import modeling
+from bigbird.core import decoder
 from bigbird.core import flags
 
 from absl import app, logging
 
-#import tensorflow.compat.v2 as tf
-import tensorflow as tf
+import tensorflow.compat.v2 as tf
+#import tensorflow as tf
 from tqdm import tqdm
 
 import sys
@@ -86,31 +87,50 @@ def embed_only(features):
   embedding, _ = model._encode(features, training=False) # i think we can leave this false?
   return embedding
 
+batch_size = 1
+
 train_input_fn = pipelines.utils.input_fn_builder(
         data_dir=FLAGS.data_dir,
         vocab_model_file=FLAGS.vocab_model_file,
         max_encoder_length=FLAGS.max_encoder_length,
         max_decoder_length=FLAGS.max_decoder_length,
         is_training=True) # changed to true
-dataset = train_input_fn({'batch_size': 2})
+dataset = train_input_fn({'batch_size': batch_size})
 
 #eval_llh = tf.keras.metrics.Mean(name='eval_llh')
 
 # k-means clustering
 # TODO: make parameters
 # final mini batch size = mini_batch_scale * batch_size
-mini_batch_scale = 256
+mini_batch_scale = 64
 iterations = 10
 k = 10
 buffer = None
 centroids = None
 
+@tf.function
+def print_tensor(t):
+    tf.print(t, summarize=-1)
+
+
+@tf.function(experimental_compile=True)
+def fwd_only(features, labels):
+  (llh, logits, pred_ids), _ = model(features, target_ids=labels,
+                                       training=False)
+  return llh, logits, pred_ids
 # populate centroids
-for ex in tqdm(dataset.take(k), position=0):
+for ex in tqdm(dataset.take(k//batch_size), position=0):
   if centroids == None:
     centroids = embed_only(ex)
   else:
-    centroids = tf.concat([centroids, ex], 0)
+    centroids = tf.concat([centroids, embed_only(ex)], 0)
+  
+  # inspect value
+  _, _, ids = fwd_only(ex, ex)
+  #logits = model.embeder.linear(c)
+  #ids = tf.cast(tf.argmax(logits, axis=-1), tf.int32)
+  print("ids =")
+  print_tensor(ids)
 
 # check initial centroid shape
 print(centroids.shape)
@@ -118,13 +138,13 @@ print(centroids.shape)
 # run k-means training
 # TODO: figure out if we should move some of this to a new @tf.function()
 # (add 1 to take() to ensure we run the last batch)
-for i, ex in enumerate(tqdm(dataset.take(2*mini_batch_scale*iterations + 1), position=0)):
+for i, ex in enumerate(tqdm(dataset.take(mini_batch_scale*iterations + 1), position=0)):
   if i % mini_batch_scale == 0:
     if i != 0:
-      print("iteration", i / mini_batch_scale)
+      print("iteration", i / (batch_size * mini_batch_scale))
       # calculate Euclidean distance between each row in buffer and each centroid
       centroid_dists = tf.norm(
-        tf.reshape(buffer, (1, mini_batch_scale*2, FLAGS.max_encoder_length, FLAGS.hidden_size)) -
+        tf.reshape(buffer, (1, mini_batch_scale*batch_size, FLAGS.max_encoder_length, FLAGS.hidden_size)) -
         tf.reshape(centroids, (k, 1, FLAGS.max_encoder_length, FLAGS.hidden_size)),
         ord='euclidean', axis=[2,3]
       )
@@ -148,7 +168,7 @@ for i, ex in enumerate(tqdm(dataset.take(2*mini_batch_scale*iterations + 1), pos
         # compute cluster distance
         print("mean distance for cluster", i, "=", tf.math.reduce_mean(
           tf.norm(cluster_members - centroid, ord='euclidean', axis=[1,2])
-        ))
+        ).numpy())
       
       # update centroid tensor
       centroids = tf.stack(new_centroids)
@@ -160,7 +180,36 @@ for i, ex in enumerate(tqdm(dataset.take(2*mini_batch_scale*iterations + 1), pos
     
 # record centroids to file
 with open(os.path.join(FLAGS.output_dir, 'centroids.pickle'), 'wb') as f:
-  pickle.dump(centroids)
+  pickle.dump(centroids, f)
+
+
+# try to decode
+full_mask = tf.ones([1, FLAGS.max_encoder_length])
+tokenizer = pipelines.utils.D2v8merTokenizer(FLAGS.vocab_model_file)
+for c in centroids:
+  # ok i think this is how we decode only
+  c = tf.reshape(c, [1, FLAGS.max_encoder_length, FLAGS.hidden_size])
+  decoder_mask = decoder.create_self_attention_mask(FLAGS.max_encoder_length)
+  outputs = model.decoder(c, decoder_mask, c, full_mask, training=False)
+
+  logits = model.embeder.linear(outputs)
+  ids = tf.cast(tf.argmax(logits, axis=-1), tf.int32)
+
+  print("ids =", ids)
+  #print_tensor(ids)
+  kmers = tokenizer.detokenize(ids)
+  print("kmers =", kmers)
+  #print_tensor(kmers)
+
+  print("for just the original centroid,")
+  logits = model.embeder.linear(c)
+  ids = tf.cast(tf.argmax(logits, axis=-1), tf.int32)
+
+  print("ids =", ids)
+  #print_tensor(ids)
+  kmers = tokenizer.detokenize(ids)
+  print("kmers =", kmers)
+  #print_tensor(kmers)
 
 
 # TODO:

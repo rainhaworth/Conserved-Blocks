@@ -18,7 +18,7 @@ print(len(files), 'sequences found')
 # this should probably have some sort of optimizer
 
 # set parameters
-batch_size = 500
+batch_size = 5000
 iterations = 10
 k = 5
 max_len = 4096
