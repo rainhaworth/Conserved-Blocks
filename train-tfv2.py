@@ -7,7 +7,7 @@ from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *
 
 itokens, otokens = dd.LoadKmerDict('./utils/8mers.txt')
-gen = dd.KmerDataGenerator('./data-tmp/', itokens, otokens, batch_size=64, max_len=50)
+gen = dd.KmerDataGenerator('/fs/nexus-scratch/rhaworth/hmp-mini/', itokens, otokens, batch_size=32, max_len=500)
 
 print('seq 1 words:', itokens.num())
 print('seq 2 words:', otokens.num())

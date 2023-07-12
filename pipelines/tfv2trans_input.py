@@ -33,6 +33,7 @@ def LoadKmerDict(dict_file=None, k=8):
     return TokenList(kmers), TokenList(kmers)
 
 # load data from files (as generator) for KmerDataGenerator
+# for use with pre-processed data with each sequence in its own .txt file
 def LoadFromDir(dir, k=8, max_len=999):
     # get list of filenames
     input_files = glob.glob(os.path.join(dir, "*.txt"))
@@ -46,12 +47,27 @@ def LoadFromDir(dir, k=8, max_len=999):
             # yield duplicates
             yield [instr[:max_len+k-1], instr[:max_len+k-1]]
 
+# load fasta data for KmerDataGenerator
+def LoadFromDirFasta(dir, k=8, max_len=999):
+    # get list of filenames
+    input_files = glob.glob(os.path.join(dir, "*.fa"))
+
+    for file in input_files:
+        with open(file) as f:
+            instr = f.read()
+            # skip metadata and very short strings
+            if instr[0] == '>' or len(instr) < k:
+                continue
+            # TODO: handle strings where len > max_len (split w/ redundancies)
+            # yield duplicates
+            yield [instr[:max_len+k-1], instr[:max_len+k-1]]
+
 # generator: fetch batches of data and write function
 def KmerDataGenerator(dir, itokens, otokens, batch_size=64, k=8, max_len=999):
     # split sequences into kmers, store in xs
     Xs = [[], []]
     while True:
-        for ss in LoadFromDir(dir, k, max_len):
+        for ss in LoadFromDirFasta(dir, k, max_len):
             for seq, xs in zip(ss, Xs):
                 # create list of kmers
                 num_kmers = len(seq) - k + 1
