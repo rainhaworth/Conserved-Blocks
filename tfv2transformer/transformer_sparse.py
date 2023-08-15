@@ -128,7 +128,7 @@ class PositionwiseFeedForward():
 		return self.layer_norm(output)
 
 class EncoderLayer():
-	def __init__(self, d_model, d_inner_hid, n_head, dropout=0.1):
+	def __init__(self, d_model, d_inner_hid, n_head, length=1024, block_size=64, dropout=0.1):
 		# sparse attention
 		# using d_model for size_per_head
 			# update: using d_model // n_head
@@ -137,12 +137,12 @@ class EncoderLayer():
 		# from_ and to_ should match
 		attn_type = 'block_sparse'
 		num_rand_blocks = 3
-		self.length = 1024
-		self.block_size = 64
+		self.length = length
+		self.block_size = block_size
 		self.self_att_layer = attention.MultiHeadedAttentionLayer(
 			attn_type, n_head, d_model // n_head, num_rand_blocks,
 			self.length, self.length, self.block_size, self.block_size,
-			dropout)
+			dropout, name='encatt')
 
 		self.pos_ffn_layer  = PositionwiseFeedForward(d_model, d_inner_hid, dropout=dropout)
 		self.norm_layer = LayerNormalization()
@@ -161,28 +161,29 @@ class EncoderLayer():
 			None, band_mask, from_mask, to_mask, block_mask, block_mask
 			], training=training)
 		# reshape
-		output = tf.reshape(output, [-1, -1, enc_input.shape[-1]])
+		out_shape = tf.concat([tf.shape(output)[:-2], [enc_input.shape[-1]]], axis=0)
+		output = tf.reshape(output, out_shape)
 		# final layers
 		output = self.norm_layer(Add()([enc_input, output]))
 		output = self.pos_ffn_layer(output)
 		return output, slf_attn
 
 class DecoderLayer():
-	def __init__(self, d_model, d_inner_hid, n_head, dropout=0.1):
+	def __init__(self, d_model, d_inner_hid, n_head, length=1024, block_size=64, dropout=0.1):
 		# sparse attention
 		# might need to set use_bias and initializer_range
 		attn_type = 'block_sparse'
 		num_rand_blocks = 3
-		self.length = 1024
-		self.block_size = 64
+		self.length = length
+		self.block_size = block_size
 		self.self_att_layer = attention.MultiHeadedAttentionLayer(
 			attn_type, n_head, d_model // n_head, num_rand_blocks,
 			self.length, self.length, self.block_size, self.block_size,
-			dropout)
+			dropout, name='decatt')
 		self.enc_att_layer = attention.MultiHeadedAttentionLayer(
 			attn_type, n_head, d_model // n_head, num_rand_blocks,
 			self.length, self.length, self.block_size, self.block_size,
-			dropout)
+			dropout, name='decencatt')
 		
 		self.pos_ffn_layer  = PositionwiseFeedForward(d_model, d_inner_hid, dropout=dropout)
 		self.norm_layer1 = LayerNormalization()
@@ -210,14 +211,16 @@ class DecoderLayer():
 			None, self_band_mask, self_from_mask, self_to_mask, self_block_mask, self_block_mask 
 		], training=training)
 		# reshape and norm
-		output = tf.reshape(output, [-1, -1, dec_input.shape[-1]])
+		out_shape = tf.concat([tf.shape(output)[:-2], [dec_input.shape[-1]]], axis=0)
+		output = tf.reshape(output, out_shape)
 		x = self.norm_layer1(Add()([dec_input, output]))
 		# encoder attention
 		output = self.enc_att_layer(x, enc_output, [
 			None, enc_band_mask, enc_from_mask, enc_to_mask, enc_block_mask, enc_block_mask
 		], training=training)
 		# reshape and norm
-		output = tf.reshape(output, [-1, -1, x.shape[-1]])
+		out_shape = tf.concat([tf.shape(output)[:-2], [x.shape[-1]]], axis=0)
+		output = tf.reshape(output, out_shape)
 		x = self.norm_layer2(Add()([x, output]))
 		# feedforward
 		output = self.pos_ffn_layer(x)
@@ -252,26 +255,34 @@ def GetSubMask(s):
 	return mask
 
 class SelfAttention():
-	def __init__(self, d_model, d_inner_hid, n_head, layers=6, dropout=0.1):
-		self.layers = [EncoderLayer(d_model, d_inner_hid, n_head, dropout) for _ in range(layers)]
+	def __init__(self, d_model, d_inner_hid, n_head, layers=6, length=1024, block_size=64, dropout=0.1):
+		self.layers = [EncoderLayer(d_model, d_inner_hid, n_head, length, block_size, dropout) for _ in range(layers)]
 	def __call__(self, src_emb, src_seq, return_att=False, active_layers=999):
 		if return_att: atts = []
 		mask = Lambda(lambda x:K.cast(K.greater(x, 0), 'float32'))(src_seq)
-		x = src_emb		
+		print(src_seq)
+		print(mask.shape)
+		print(mask)
+		print(src_emb.shape)
+		x = src_emb
 		for enc_layer in self.layers[:active_layers]:
 			x, att = enc_layer(x, mask)
 			if return_att: atts.append(att)
 		return (x, atts) if return_att else x
 
 class Decoder():
-	def __init__(self, d_model, d_inner_hid, n_head, layers=6, dropout=0.1):
-		self.layers = [DecoderLayer(d_model, d_inner_hid, n_head, dropout) for _ in range(layers)]
+	def __init__(self, d_model, d_inner_hid, n_head, layers=6, length=1024, block_size=64, dropout=0.1):
+		self.layers = [DecoderLayer(d_model, d_inner_hid, n_head, length, block_size, dropout) for _ in range(layers)]
 	def __call__(self, tgt_emb, tgt_seq, src_seq, enc_output, return_att=False, active_layers=999):
 		x = tgt_emb
-		self_pad_mask = Lambda(lambda x:GetPadMask(x, x))(tgt_seq)
-		self_sub_mask = Lambda(GetSubMask)(tgt_seq)
-		self_mask = Lambda(lambda x:K.minimum(x[0], x[1]))([self_pad_mask, self_sub_mask])
-		enc_mask = Lambda(lambda x:GetPadMask(x[0], x[1]))([tgt_seq, src_seq])
+		# temporarily use 1D masks
+		#self_pad_mask = Lambda(lambda x:GetPadMask(x, x))(tgt_seq)
+		#self_sub_mask = Lambda(GetSubMask)(tgt_seq)
+		#self_mask = Lambda(lambda x:K.minimum(x[0], x[1]))([self_pad_mask, self_sub_mask])
+		#enc_mask = Lambda(lambda x:GetPadMask(x[0], x[1]))([tgt_seq, src_seq])
+		# i guess these are the same here lol
+		self_mask = Lambda(lambda x:K.cast(K.greater(x, 0), 'float32'))(tgt_seq)
+		enc_mask = Lambda(lambda x:K.cast(K.greater(x, 0), 'float32'))(src_seq)
 		if return_att: self_atts, enc_atts = [], []
 		for dec_layer in self.layers[:active_layers]:
 			x, self_att, enc_att = dec_layer(x, enc_output, self_mask, enc_mask)
@@ -459,7 +470,8 @@ def decode_batch_beam_search(src_seq, topk, encode_model, decode_model, start_ma
 
 class Transformer:
 	def __init__(self, i_tokens, o_tokens, len_limit, d_model=256, \
-			  d_inner_hid=512, n_head=4, layers=2, dropout=0.1, \
+			  d_inner_hid=512, n_head=4, layers=2, \
+			  length=1024, block_size=64, dropout=0.1, \
 			  share_word_emb=False):
 		self.i_tokens = i_tokens
 		self.o_tokens = o_tokens
@@ -485,8 +497,8 @@ class Transformer:
 			self.o_word_emb = self.i_word_emb
 		else: self.o_word_emb = Embedding(o_tokens.num(), d_emb)
 
-		self.encoder = SelfAttention(d_model, d_inner_hid, n_head, layers, dropout)
-		self.decoder = Decoder(d_model, d_inner_hid, n_head, layers, dropout)
+		self.encoder = SelfAttention(d_model, d_inner_hid, n_head, layers, length, block_size, dropout)
+		self.decoder = Decoder(d_model, d_inner_hid, n_head, layers, length, block_size, dropout)
 		self.target_layer = TimeDistributed(Dense(o_tokens.num(), use_bias=False))
 
 	def compile(self, optimizer='adam', active_layers=999):
@@ -494,8 +506,7 @@ class Transformer:
 		tgt_seq_input = Input(shape=(None,), dtype='int32')
 
 		src_seq = src_seq_input
-		tgt_seq  = Lambda(lambda x:x[:,:-1])(tgt_seq_input)
-		tgt_true = Lambda(lambda x:x[:,1:])(tgt_seq_input)
+		tgt_seq = tgt_true = tgt_seq_input
 
 		src_emb = self.i_word_emb(src_seq)
 		tgt_emb = self.o_word_emb(tgt_seq)

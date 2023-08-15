@@ -6,8 +6,11 @@ import numpy as np
 from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *
 
+# set global max length
+max_len = 4096
+
 itokens, otokens = dd.LoadKmerDict('./utils/8mers.txt')
-gen = dd.KmerDataGenerator('./data-tmp/', itokens, otokens, batch_size=32, max_len=1024)
+gen = dd.KmerDataGenerator('./data-tmp/', itokens, otokens, batch_size=4, max_len=max_len)
 #/fs/nexus-scratch/rhaworth/hmp-mini/
 
 print('seq 1 words:', itokens.num())
@@ -22,11 +25,12 @@ s2s.model.fit([Xtrain, Ytrain], None, batch_size=64, epochs=30, validation_data=
 
 from tfv2transformer.transformer_sparse import Transformer, LRSchedulerPerStep
 
-d_model = 256
-s2s = Transformer(itokens, otokens, len_limit=70, d_model=d_model, d_inner_hid=512, \
-                   n_head=8, layers=2, dropout=0.1)
+d_model = 512
+block_size = 64
+s2s = Transformer(itokens, otokens, len_limit=1024, d_model=d_model, d_inner_hid=512, \
+                   n_head=8, layers=2, length=max_len, block_size=block_size, dropout=0.1)
 
-mfile = 'models/tfv2test.model.h5'
+mfile = 'models/tmp.model.h5'
 
 lr_scheduler = LRSchedulerPerStep(d_model, 4000) 
 model_saver = ModelCheckpoint(mfile, save_best_only=True, save_weights_only=True)
