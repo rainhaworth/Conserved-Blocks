@@ -88,6 +88,60 @@ def KmerDataGenerator(dir, itokens, otokens, batch_size=64, k=8, max_len=999):
                 yield [X, Y], None
                 Xs = [[], []]
 
+# build index of file data, stored in memory
+# store as sequences to save memory
+class DataIndex:
+    def __init__(self, dir, itokens, otokens, k=8, max_len=4096, split=False):
+        # split: produce separate indices for each file
+        self.k = k
+        self.itokens = itokens
+        self.otokens = otokens
+        self.max_len = max_len
+        self.split = split
+
+        # TODO: from dir (.txt) vs from fasta
+        self.index = []
+        if split == False:
+            for ss in LoadFromDir(dir, k, max_len):
+                self.index.append(ss)
+        else:
+            # TODO: write function to avoid this duplicate code
+            # grab all files
+            input_files = glob.glob(os.path.join(dir, "*.txt"))
+            for file in input_files:
+                inarr = []
+                with open(file) as f:
+                    instr = f.read()
+                    # skip short/empty strings; hopefully these have been filtered out already
+                    if len(instr) < k:
+                        continue
+                    inarr.append(instr)
+                # add array to index
+                self.index.append(inarr)
+
+    def get(self, idx, file=None):
+        # for indices split across multiple files, pass in the desired file number (array index)
+        if file != None:
+            data = self.index[file][idx]
+        else:
+            data = self.index[idx]
+        # generate list of kmers, fetch tokens, pad
+        num_kmers = len(data[0]) - self.k + 1
+        data[0] = [data[0][i:i+self.k] for i in range(num_kmers)]
+        data[1] = [data[1][i:i+self.k] for i in range(num_kmers)]
+        X, Y = pad_to_max(data[0], self.itokens, self.max_len), pad_to_max(data[1], self.otokens, self.max_len)
+        return [X, Y], None
+    
+    def len(self):
+        if self.split == False:
+            return len(self.index)
+        else:
+            # iterate over files
+            length = 0
+            for file in self.index:
+                length += len(file)
+            return length
+
 if __name__ == '__main__':
     # test code
     itok, otok = LoadKmerDict('../utils/8mers.txt')

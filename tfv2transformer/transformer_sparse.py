@@ -501,7 +501,8 @@ class Transformer:
 		self.decoder = Decoder(d_model, d_inner_hid, n_head, layers, length, block_size, dropout)
 		self.target_layer = TimeDistributed(Dense(o_tokens.num(), use_bias=False))
 
-	def compile(self, optimizer='adam', active_layers=999):
+	# enc_out flag: return enc_output along with final_output if set True
+	def compile(self, optimizer='adam', active_layers=999, enc_out=False):
 		src_seq_input = Input(shape=(None,), dtype='int32')
 		tgt_seq_input = Input(shape=(None,), dtype='int32')
 
@@ -538,7 +539,10 @@ class Transformer:
 		self.ppl = K.exp(loss)
 		self.accu = get_accu(final_output, tgt_true)
 
-		self.model = Model([src_seq_input, tgt_seq_input], final_output)
+		if enc_out:
+			self.model = Model([src_seq_input, tgt_seq_input], [final_output, enc_output])
+		else:
+			self.model = Model([src_seq_input, tgt_seq_input], final_output)
 		self.model.add_loss([loss])
 		self.model.add_metric(self.ppl, name='ppl')
 		self.model.add_metric(self.accu, name='accu')
