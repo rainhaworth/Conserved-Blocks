@@ -1,16 +1,31 @@
 # train tfv2 transformer with kmer data
 # modified from en2de_main.py and pinyin_main.py
 import os, sys
+import argparse
 import tfv2transformer.input as dd
 import numpy as np
 from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *
 
+
+# parse arguments
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    '--maxlen', type=int, help='Length limit on the k-mers', default=4096
+)
+parser.add_argument(
+    '-d', '--kmerdir', help='Folder containing sequences to be processed', 
+    default='/fs/nexus-scratch/rhaworth/hmp-mini/'
+)
+
+args = parser.parse_args()
+
 # set global max length
-max_len = 4096
+max_len = args.maxlen
 
 itokens, otokens = dd.LoadKmerDict('./utils/8mers.txt')
-gen = dd.KmerDataGenerator('/fs/nexus-scratch/rhaworth/hmp-mini/', itokens, otokens, batch_size=4, max_len=max_len)
+gen = dd.KmerDataGenerator(args.kmerdir, itokens, otokens, batch_size=4, max_len=max_len)
 
 print('seq 1 words:', itokens.num())
 print('seq 2 words:', otokens.num())
