@@ -1,7 +1,7 @@
 # train tfv2 transformer with kmer data
 # modified from en2de_main.py and pinyin_main.py
 import os, sys
-import pipelines.tfv2trans_input as dd
+import tfv2transformer.input as dd
 import numpy as np
 from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *

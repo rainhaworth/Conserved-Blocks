@@ -1,5 +1,5 @@
 import os, sys
-import pipelines.tfv2trans_input as dd
+import tfv2transformer.input as dd
 import numpy as np
 from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *

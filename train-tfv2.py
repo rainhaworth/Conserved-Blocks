@@ -1,7 +1,7 @@
 # train tfv2 transformer with kmer data
 # modified from en2de_main.py and pinyin_main.py
 import os, sys
-import pipelines.tfv2trans_input as dd
+import tfv2transformer.input as dd
 import numpy as np
 from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *
@@ -25,7 +25,7 @@ d_model = 256
 s2s = Transformer(itokens, otokens, len_limit=70, d_model=d_model, d_inner_hid=512, \
                    n_head=8, layers=2, dropout=0.1)
 
-mfile = 'models/tfv2test.model.h5'
+mfile = '/fs/nexus-scratch/rhaworth/models/tfv2full.model.h5'
 
 lr_scheduler = LRSchedulerPerStep(d_model, 4000) 
 model_saver = ModelCheckpoint(mfile, save_best_only=True, save_weights_only=True)

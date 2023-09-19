@@ -55,7 +55,7 @@ metric = cos_loss_dist
 
 # import string generation, padding
 from utils.synthdata import gen_seq
-from pipelines.tfv2trans_input import pad_to_max
+from tfv2transformer.input import pad_to_max
 
 # convert sequence to kmers, with padding
 def seq2kmers(seq, k=8):
