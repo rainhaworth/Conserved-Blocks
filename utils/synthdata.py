@@ -40,7 +40,7 @@ def gen_synth_dataset(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_size',       type=int,   default=1000, help='Number of sequences in the dataset')
-    parser.add_argument('--seq_len',    type=int,   default=4000, help='Length of each sequence')
+    parser.add_argument('--seq_len',    type=int,   default=4096, help='Length of each sequence')
 
     parser.add_argument('--conserved_len',   type=int,   default=500, help='Length of conserved block')
     parser.add_argument('--conserved_fraction', type=float, default=0.8, help='Fraction of sequences with conserved block')

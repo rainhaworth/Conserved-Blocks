@@ -142,7 +142,7 @@ class EncoderLayer():
 		self.self_att_layer = attention.MultiHeadedAttentionLayer(
 			attn_type, n_head, d_model // n_head, num_rand_blocks,
 			self.length, self.length, self.block_size, self.block_size,
-			dropout, name='encatt')
+			dropout)
 
 		self.pos_ffn_layer  = PositionwiseFeedForward(d_model, d_inner_hid, dropout=dropout)
 		self.norm_layer = LayerNormalization()
@@ -179,11 +179,11 @@ class DecoderLayer():
 		self.self_att_layer = attention.MultiHeadedAttentionLayer(
 			attn_type, n_head, d_model // n_head, num_rand_blocks,
 			self.length, self.length, self.block_size, self.block_size,
-			dropout, name='decatt')
+			dropout)
 		self.enc_att_layer = attention.MultiHeadedAttentionLayer(
 			attn_type, n_head, d_model // n_head, num_rand_blocks,
 			self.length, self.length, self.block_size, self.block_size,
-			dropout, name='decencatt')
+			dropout)
 		
 		self.pos_ffn_layer  = PositionwiseFeedForward(d_model, d_inner_hid, dropout=dropout)
 		self.norm_layer1 = LayerNormalization()
@@ -260,10 +260,6 @@ class SelfAttention():
 	def __call__(self, src_emb, src_seq, return_att=False, active_layers=999):
 		if return_att: atts = []
 		mask = Lambda(lambda x:K.cast(K.greater(x, 0), 'float32'))(src_seq)
-		print(src_seq)
-		print(mask.shape)
-		print(mask)
-		print(src_emb.shape)
 		x = src_emb
 		for enc_layer in self.layers[:active_layers]:
 			x, att = enc_layer(x, mask)
@@ -502,7 +498,7 @@ class Transformer:
 		self.target_layer = TimeDistributed(Dense(o_tokens.num(), use_bias=False))
 
 	# enc_out flag: return enc_output along with final_output if set True
-	def compile(self, optimizer='adam', active_layers=999, enc_out=False):
+	def compile(self, optimizer='adam', active_layers=999):
 		src_seq_input = Input(shape=(None,), dtype='int32')
 		tgt_seq_input = Input(shape=(None,), dtype='int32')
 
@@ -539,10 +535,7 @@ class Transformer:
 		self.ppl = K.exp(loss)
 		self.accu = get_accu(final_output, tgt_true)
 
-		if enc_out:
-			self.model = Model([src_seq_input, tgt_seq_input], [final_output, enc_output])
-		else:
-			self.model = Model([src_seq_input, tgt_seq_input], final_output)
+		self.model = Model([src_seq_input, tgt_seq_input], final_output)
 		self.model.add_loss([loss])
 		self.model.add_metric(self.ppl, name='ppl')
 		self.model.add_metric(self.accu, name='accu')
@@ -683,6 +676,15 @@ class Transformer:
 		if type(input_seqs[0]) is type('') and len(rets) == 1: rets = rets[0]
 		return rets
 	
+	# make encoder-only model for clustering
+	def make_encode_model(self):
+		src_seq_input = Input(shape=(None,), dtype='int32')
+		src_emb = self.i_word_emb(src_seq_input)
+		if self.pos_emb: src_emb = add_layer([src_emb, self.pos_emb(src_seq_input)])
+		src_emb = self.emb_dropout(src_emb)
+		enc_output = self.encoder(src_emb, src_seq_input)
+		self.encode_model = Model(src_seq_input, enc_output)
+
 class PosEncodingLayer:
 	def __init__(self, max_len, d_emb):
 		self.pos_emb_matrix = Embedding(max_len, d_emb, trainable=False, \

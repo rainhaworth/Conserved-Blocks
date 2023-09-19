@@ -64,13 +64,17 @@ def LoadFromDirFasta(dir, k=8, max_len=999):
 
     for file in input_files:
         with open(file) as f:
-            instr = f.read()
-            # skip metadata and very short strings
-            if instr[0] == '>' or len(instr) < k:
-                continue
-            # TODO: handle strings where len > max_len (split w/ redundancies)
-            # yield duplicates
-            yield [instr[:max_len+k-1], instr[:max_len+k-1]]
+            # loop over all lines
+            while True:
+                instr = f.readline()
+                if not instr:
+                    break
+                # skip metadata and very short strings
+                if instr[0] == '>' or len(instr) < k:
+                    continue
+                # TODO: handle strings where len > max_len (split w/ redundancies)
+                # yield duplicates
+                yield [instr[:max_len+k-1], instr[:max_len+k-1]]
 
 # generator: fetch batches of data and write function
 def KmerDataGenerator(dir, itokens, otokens, batch_size=64, k=8, max_len=999):
@@ -91,19 +95,26 @@ def KmerDataGenerator(dir, itokens, otokens, batch_size=64, k=8, max_len=999):
 # build index of file data, stored in memory
 # store as sequences to save memory
 class DataIndex:
-    def __init__(self, dir, itokens, otokens, k=8, max_len=4096, split=False):
+    def __init__(self, dir, itokens, otokens, k=8, max_len=4096, split=False, fasta=False):
         # split: produce separate indices for each file
+        # fasta: use LoadFromDirFasta vs LoadFromDir
         self.k = k
         self.itokens = itokens
         self.otokens = otokens
         self.max_len = max_len
         self.split = split
 
+        if fasta:
+            loadfn = LoadFromDirFasta
+        else:
+            loadfn = LoadFromDir
+
         # TODO: from dir (.txt) vs from fasta
         self.index = []
         if split == False:
-            for ss in LoadFromDir(dir, k, max_len):
-                self.index.append(ss)
+            for ss in loadfn(dir, k, max_len):
+                # just store X, drop Y
+                self.index.append(ss[0])
         else:
             # TODO: write function to avoid this duplicate code
             # grab all files
@@ -126,11 +137,11 @@ class DataIndex:
         else:
             data = self.index[idx]
         # generate list of kmers, fetch tokens, pad
-        num_kmers = len(data[0]) - self.k + 1
-        data[0] = [data[0][i:i+self.k] for i in range(num_kmers)]
-        data[1] = [data[1][i:i+self.k] for i in range(num_kmers)]
-        X, Y = pad_to_max(data[0], self.itokens, self.max_len), pad_to_max(data[1], self.otokens, self.max_len)
-        return [X, Y], None
+        num_kmers = len(data) - self.k + 1
+        return pad_to_max(
+            [data[i:i+self.k] for i in range(num_kmers)],
+            self.itokens, self.max_len
+        )
     
     def len(self):
         if self.split == False:

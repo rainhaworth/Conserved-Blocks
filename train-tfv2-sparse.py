@@ -10,8 +10,7 @@ from tensorflow.keras.callbacks import *
 max_len = 4096
 
 itokens, otokens = dd.LoadKmerDict('./utils/8mers.txt')
-gen = dd.KmerDataGenerator('./data-tmp/', itokens, otokens, batch_size=4, max_len=max_len)
-#/fs/nexus-scratch/rhaworth/hmp-mini/
+gen = dd.KmerDataGenerator('/fs/nexus-scratch/rhaworth/hmp-mini/', itokens, otokens, batch_size=4, max_len=max_len)
 
 print('seq 1 words:', itokens.num())
 print('seq 2 words:', otokens.num())
@@ -30,10 +29,10 @@ block_size = 64
 s2s = Transformer(itokens, otokens, len_limit=1024, d_model=d_model, d_inner_hid=512, \
                    n_head=8, layers=2, length=max_len, block_size=block_size, dropout=0.1)
 
-mfile = 'models/tmp.model.h5'
+mfile = '/fs/nexus-scratch/rhaworth/models/tmp.model.h5'
 
-lr_scheduler = LRSchedulerPerStep(d_model, 4000) 
-model_saver = ModelCheckpoint(mfile, save_best_only=True, save_weights_only=True)
+lr_scheduler = LRSchedulerPerStep(d_model, 4000)
+model_saver = ModelCheckpoint(mfile, monitor='loss', save_best_only=True, save_weights_only=True)
 
 s2s.compile(Adam(0.001, 0.9, 0.98, epsilon=1e-9))
 try: s2s.model.load_weights(mfile)
@@ -81,4 +80,3 @@ else:
     for t in tokens[0]:
         kmers.append(otokens.token(t))
     print(kmers)
-
