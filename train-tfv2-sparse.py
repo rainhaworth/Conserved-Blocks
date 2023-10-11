@@ -15,10 +15,13 @@ parser.add_argument(
     '--maxlen', type=int, help='Length limit on the k-mers', default=4096
 )
 parser.add_argument(
-    '-d', '--kmerdir', help='Folder containing sequences to be processed', 
+    '-i', '--kmerdir', help='Folder containing sequences to be processed', 
     default='/fs/nexus-scratch/rhaworth/hmp-mini/'
 )
-
+parser.add_argument(
+    '-o', '--output', help='Location for resultant model weights', 
+    default='/fs/nexus-scratch/rhaworth/models/tmp.model.h5'
+)
 args = parser.parse_args()
 
 # set global max length
@@ -44,7 +47,7 @@ block_size = 64
 s2s = Transformer(itokens, otokens, len_limit=1024, d_model=d_model, d_inner_hid=512, \
                    n_head=8, layers=2, length=max_len, block_size=block_size, dropout=0.1)
 
-mfile = '/fs/nexus-scratch/rhaworth/models/tmp.model.h5'
+mfile = args.output
 
 lr_scheduler = LRSchedulerPerStep(d_model, 4000)
 model_saver = ModelCheckpoint(mfile, monitor='loss', save_best_only=True, save_weights_only=True)
