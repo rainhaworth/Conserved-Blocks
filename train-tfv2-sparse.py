@@ -1,6 +1,6 @@
 # train tfv2 transformer with kmer data
 # modified from en2de_main.py and pinyin_main.py
-import os, sys
+import os, sys, pathlib
 import argparse
 import tfv2transformer.input as dd
 import numpy as np
@@ -27,7 +27,8 @@ args = parser.parse_args()
 # set global max length
 max_len = args.maxlen
 
-itokens, otokens = dd.LoadKmerDict('./utils/8mers.txt')
+file8mers = pathlib.Path(__file__).parent / 'utils' / '8mers.txt'
+itokens, otokens = dd.LoadKmerDict(file8mers)
 gen = dd.KmerDataGenerator(args.kmerdir, itokens, otokens, batch_size=4, max_len=max_len)
 
 print('seq 1 words:', itokens.num())
