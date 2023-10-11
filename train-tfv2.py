@@ -6,8 +6,25 @@ import numpy as np
 from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *
 
+# parse arguments
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    '--maxlen', type=int, help='Length limit on the k-mers', default=500
+)
+parser.add_argument(
+    '-i', '--kmerdir', help='Folder containing sequences to be processed', 
+    default='/fs/nexus-scratch/rhaworth/hmp-mini/'
+)
+parser.add_argument(
+    '-o', '--output', help='Location for resultant model weights', 
+    default='/fs/nexus-scratch/rhaworth/models/tfv2full.model.h5'
+)
+args = parser.parse_args()
+
+
 itokens, otokens = dd.LoadKmerDict('./utils/8mers.txt')
-gen = dd.KmerDataGenerator('/fs/nexus-scratch/rhaworth/hmp-mini/', itokens, otokens, batch_size=32, max_len=500)
+gen = dd.KmerDataGenerator(args.kmerdir, itokens, otokens, batch_size=32, max_len=args.maxlen)
 
 print('seq 1 words:', itokens.num())
 print('seq 2 words:', otokens.num())
@@ -25,7 +42,7 @@ d_model = 256
 s2s = Transformer(itokens, otokens, len_limit=70, d_model=d_model, d_inner_hid=512, \
                    n_head=8, layers=2, dropout=0.1)
 
-mfile = '/fs/nexus-scratch/rhaworth/models/tfv2full.model.h5'
+mfile = args.output
 
 lr_scheduler = LRSchedulerPerStep(d_model, 4000) 
 model_saver = ModelCheckpoint(mfile, save_best_only=True, save_weights_only=True)
@@ -76,4 +93,3 @@ else:
     for t in tokens[0]:
         kmers.append(otokens.token(t))
     print(kmers)
-
