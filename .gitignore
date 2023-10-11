@@ -16,3 +16,6 @@ bigbird/CONTRIBUTING.md
 *.egg-info
 **/__pycache__/
 data-*
+
+.vscode
+*.pyc
