@@ -1,41 +1,67 @@
 # imported from cluster-tfv2-dbscan
 import os, sys, random
-import pipelines.tfv2trans_input as dd
+import tfv2transformer.input as dd
 import numpy as np
 from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *
 import tensorflow as tf
 
 # set max length
-max_len = 4096
+#max_len = 4096
+max_len = 512
 
 itokens, otokens = dd.LoadKmerDict('./utils/8mers.txt')
 #gen = dd.KmerDataGenerator('./data-tmp/', itokens, otokens, batch_size=1, max_len=max_len)
+
+print('tokens:', itokens.num(), otokens.num())
 
 # (don't need this for now)
 # make indexed list of all sequences
 seqs = dd.DataIndex('/fs/nexus-scratch/rhaworth/synth/', itokens, otokens, max_len=max_len, fasta=True)
 
-from tfv2transformer.transformer_sparse import Transformer, LRSchedulerPerStep
+from tfv2transformer.transformer import Transformer, LRSchedulerPerStep
 
-d_model = 512
-block_size = 64
-s2s = Transformer(itokens, otokens, len_limit=512, d_model=d_model, d_inner_hid=512, \
-                   n_head=8, layers=2, length=max_len, block_size=block_size, dropout=0.1)
+d_model=256
+#d_model = 512
+#block_size = 64
+#s2s = Transformer(itokens, otokens, len_limit=512, d_model=d_model, d_inner_hid=512, \
+#                   n_head=8, layers=2, length=max_len, block_size=block_size, dropout=0.1)
+s2s = Transformer(itokens, otokens, len_limit=70, d_model=d_model, d_inner_hid=512, \
+                   n_head=8, layers=2, dropout=0.1)
 
-mfile = '/fs/nexus-scratch/rhaworth/models/tmp.model.h5'
+#mfile = '/fs/nexus-scratch/rhaworth/models/tmp.model.h5'
+# intentionally missing model file; remove -broken
+mfile = '/fs/nexus-scratch/rhaworth/models/tfv2full.model.h5'
 
 s2s.compile(Adam(0.001, 0.9, 0.98, epsilon=1e-9))
 try: s2s.model.load_weights(mfile)
 except: print('No model file found at', mfile)
 
 # make encoder-only model
-s2s.make_encode_model()
+s2s.make_fast_decode_model()
 
 # define distance metrics
 def cos_loss_dist(x, y):
-    cos_loss = -tf.reduce_sum([tf.math.l2_normalize(tf.squeeze(x)), tf.math.l2_normalize(tf.squeeze(y))])
-    return (cos_loss + 1) / 2
+    cos_loss = -tf.reduce_sum([tf.math.l2_normalize(tf.squeeze(x)) @ tf.math.l2_normalize(tf.squeeze(y))])
+    return 1 - cos_loss
+
+def l1_dist(x, y):
+    return tf.reduce_sum(x - y)
+
+def l2_dist(x,y):
+    return tf.norm(x - y, 2)
+
+def linf_dist(x, y):
+    return tf.norm(x - y, np.inf)
+
+def fro_dist(x, y):
+    return tf.norm(x-y)
+
+# test metric
+def diff_count(x, y):
+    eq = tf.math.equal(x, y)
+    y, _, count = tf.unique_with_counts(tf.reshape(eq, [-1]))
+    return [y,count]
 
 # choose metric for tests
 metric = cos_loss_dist
@@ -59,15 +85,16 @@ from tfv2transformer.input import pad_to_max
 
 # convert sequence to kmers, with padding
 def seq2kmers(seq, k=8):
+    # new implementation
     num_kmers = len(seq) - k + 1
-    return pad_to_max(
-            [seq[i:i+k] for i in range(num_kmers)],
-            itokens, max_len # probably bad to use a global value here but it will work
-        )
+    kmers = np.zeros((1, max_len))
+    for i in range(num_kmers):
+        kmers[0,i] = itokens.id(seq[i:i+k])
+    return kmers
 
 # first random seq
 randseq1 = gen_seq(max_len)
-pred_1 = s2s.encode_model.predict(seq2kmers(randseq1), batch_size=1, steps=1, verbose=0)
+pred_1 = s2s.encode_model(seq2kmers(randseq1))
 
 # test 1: identical strings/embeddings
 print("test 1 dist:", metric(pred_1, pred_1))
@@ -75,30 +102,32 @@ print("test 1 dist:", metric(pred_1, pred_1))
 # TODO: test 2
 
 # test 3: identical blocks in same position, different strings
-block_len = 1000
-pos = 450
+#block_len = 1000
+#pos = 450
+block_len = 150
+pos = 100
 block1 = gen_seq(block_len)
 randseq2 = gen_seq(max_len)
 
 randseq1_block1 = randseq1[:pos] + block1 + randseq1[pos+block_len:]
 randseq2_block1 = randseq2[:pos] + block1 + randseq2[pos+block_len:]
 
-pred_test3_1 = s2s.encode_model.predict(seq2kmers(randseq1_block1), batch_size=1, steps=1, verbose=0)
-pred_test3_2 = s2s.encode_model.predict(seq2kmers(randseq2_block1), batch_size=1, steps=1, verbose=0)
+pred_test3_1 = s2s.encode_model(seq2kmers(randseq1_block1))
+pred_test3_2 = s2s.encode_model(seq2kmers(randseq2_block1))
 
 print("test 3 dist:", metric(pred_test3_1, pred_test3_2))
 
 # test 4: same blocks, different position
-pos2 = 2000
+pos2 = 300
 randseq2_block1_pos2 = randseq2[:pos2] + block1 + randseq2[pos2+block_len:]
-pred_test4 = s2s.encode_model.predict(seq2kmers(randseq2_block1_pos2), batch_size=1, steps=1, verbose=0)
+pred_test4 = s2s.encode_model(seq2kmers(randseq2_block1_pos2))
 
 print("test 4 dist:", metric(pred_test3_1, pred_test4))
 
 # TODO: test 5 and 6
 
 # test 7: random strings
-pred_test7 = s2s.encode_model.predict(seq2kmers(randseq2), batch_size=1, steps=1, verbose=0)
+pred_test7 = s2s.encode_model(seq2kmers(randseq2))
 print("test 7 dist:", metric(pred_1, pred_test7))
 
 # TODO: test 8

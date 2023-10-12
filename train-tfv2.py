@@ -7,7 +7,7 @@ from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *
 
 itokens, otokens = dd.LoadKmerDict('./utils/8mers.txt')
-gen = dd.KmerDataGenerator('/fs/nexus-scratch/rhaworth/hmp-mini/', itokens, otokens, batch_size=32, max_len=500)
+gen = dd.KmerDataGenerator('/fs/nexus-scratch/rhaworth/hmp-mini/', itokens, otokens, batch_size=32, max_len=512)
 
 print('seq 1 words:', itokens.num())
 print('seq 2 words:', otokens.num())
@@ -28,7 +28,7 @@ s2s = Transformer(itokens, otokens, len_limit=70, d_model=d_model, d_inner_hid=5
 mfile = '/fs/nexus-scratch/rhaworth/models/tfv2full.model.h5'
 
 lr_scheduler = LRSchedulerPerStep(d_model, 4000) 
-model_saver = ModelCheckpoint(mfile, save_best_only=True, save_weights_only=True)
+model_saver = ModelCheckpoint(mfile, monitor='loss', save_best_only=True, save_weights_only=True)
 
 s2s.compile(Adam(0.001, 0.9, 0.98, epsilon=1e-9))
 try: s2s.model.load_weights(mfile)
