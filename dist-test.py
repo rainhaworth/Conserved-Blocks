@@ -34,8 +34,14 @@ s2s.make_encode_model()
 
 # define distance metrics
 def cos_loss_dist(x, y):
-    cos_loss = -tf.reduce_sum([tf.math.l2_normalize(tf.squeeze(x)), tf.math.l2_normalize(tf.squeeze(y))])
+    cos_loss = -tf.reduce_sum([tf.math.l2_normalize(tf.squeeze(x)) @ tf.math.l2_normalize(tf.squeeze(y))])
     return (cos_loss + 1) / 2
+
+def l1_dist(x, y):
+    return tf.reduce_sum(x - y)
+
+def l2_dist(x,y):
+    return tf.norm(x - y, 2)
 
 # choose metric for tests
 metric = cos_loss_dist
@@ -59,11 +65,12 @@ from tfv2transformer.input import pad_to_max
 
 # convert sequence to kmers, with padding
 def seq2kmers(seq, k=8):
+    # new implementation
     num_kmers = len(seq) - k + 1
-    return pad_to_max(
-            [seq[i:i+k] for i in range(num_kmers)],
-            itokens, max_len # probably bad to use a global value here but it will work
-        )
+    kmers = np.zeros((1, max_len))
+    for i in range(num_kmers):
+        kmers[i] = itokens.id(seq[i:i+k])
+    return kmers
 
 # first random seq
 randseq1 = gen_seq(max_len)

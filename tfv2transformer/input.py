@@ -92,6 +92,53 @@ def KmerDataGenerator(dir, itokens, otokens, batch_size=64, k=8, max_len=999):
                 yield [X, Y], None
                 Xs = [[], []]
 
+# very basic generator of pairs of data with shared blocks
+# generates padded kmer lists
+def gen_simple_contrastive_data(max_len=4096, min_len=500, block_max=4096, block_min=500, batch_size=8, tokens=None, k=8):
+    """Generate contrastive samples
+
+    Parameters:
+        max_len, min_len: bounds for total sequence length
+        block_max, block_min: bounds for block length
+        batch_size: fixed batch size to yield
+        tokens: tokens to represent kmers; leave as None to produce strings
+        k: length of kmer
+    Returns:
+        A list of strings or a list of lists of kmers
+    """
+    def gen_seq(length):
+        return ''.join(random.choice('ACGT') for _ in range(length))
+    
+    seqs = [[],[]]
+
+    assert batch_size % 2 == 0
+
+    while True:
+        # generate (batch_size/2) blocks
+        for _ in range(batch_size/2):
+            block_length = random.randint(block_min, block_max)
+            block = gen_seq(block_length)
+
+            # generate 2 sequences for each block
+            for i in range(2):
+                # make them at least large enough to hold the block
+                len_seq = random.randint(max(block_length, min_len), max_len)
+                if len_seq == block_length:
+                    num_kmers = len(block) - k + 1
+                    seqs[i].append([block[i:i+k] for i in range(num_kmers)])
+                seq = gen_seq(len_seq - block_length)
+                # insert block at random point
+                insert_point = random.randint(0, len(seq)-1)
+                seq = seq[:insert_point] + block + seq[insert_point:]
+                
+                num_kmers = len(seq) - k + 1
+                seqs[i].append([seq[i:i+k] for i in range(num_kmers)])
+
+        # yield complete list of sequences
+        a, b = pad_to_max(seqs[0], tokens, max_len), pad_to_max(seqs[1], tokens, max_len)
+        yield np.concatenate([a,b], axis=0)
+        seqs = [[],[]]
+
 # build index of file data, stored in memory
 # store as sequences to save memory
 class DataIndex:
