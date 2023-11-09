@@ -594,7 +594,6 @@ class Transformer:
 		rets = [[(delimiter.join(list(map(self.o_tokens.token, x))), y) for x, y in r] for r in rets]
 		if type(input_seqs[0]) is type('') and len(rets) == 1: rets = rets[0]
 		return rets
-	
 	# make encoder-only model for clustering
 	def make_encode_model(self):
 		src_seq_input = Input(shape=(None,), dtype='int32')
@@ -603,7 +602,6 @@ class Transformer:
 		src_emb = self.emb_dropout(src_emb)
 		enc_output = self.encoder(src_emb, src_seq_input)
 		self.encode_model = Model(src_seq_input, enc_output)
-	
 class PosEncodingLayer:
 	def __init__(self, max_len, d_emb):
 		self.pos_emb_matrix = Embedding(max_len, d_emb, trainable=False, \

@@ -1,8 +1,29 @@
 # Conserved-Blocks
 A deep learning pipline for unsupervised identification of shared segments of DNA across a microbial population.
 
+## Keras Implementation
+Two versions of this implementation are available: a standard "full-attention" transformer and one using Big Bird's sparse attention mechanism. The latter is currently in development and is desirable for its ability to handle longer sequences.
+
+Both make use of `tfv2transformer/input.py`, which contains methods to convert DNA sequences into (tokenized) 8-mer sequences that can be handled by the transformer.
+
+### Sparse Attention
+The transformer model is defined in `tfv2transformer/transformer_sparse.py`.
+
+The sparse attention mechanism is defined in `tfv2transformer/attention.py`, which was taken from the Big Bird repo. 
+
+The model can be trained by running `train-tfv2-sparse.py`, which will save the model weights to a user-defined file. 
+
+Once a file containing model weights has been generated, it can be used with `cluster-tfv2-dbscan.py` to generate clusters. Additionally, the `dist-test.py` file can be used to investigate the effects of any distance metric. 
+
+### Full Attention
+The transformer model is defined in `tfv2transformer/transformer.py`.
+
+The model can be trained by running `train-tfv2.py`, which will save the model weights to a user-defined file.
+
+With minimal modification, the `cluster-tfv2-dbscan.py` and `dist-test.py` scripts can also be used with the full attention implementation.
+
 ## FFT Implementation
-Encodings are implemented in `fft_utils.py`. Dataset directory and output directory unfortunately must currently be manually set by editing the `.py` file they appear in. Other parameters are possible to set with command line arguments unless otherwise stated. 
+Not currently in development. Encodings are implemented in `fft_utils.py`. Dataset directory and output directory must currently be manually set by editing the `.py` file they appear in. Other parameters are possible to set with command line arguments unless otherwise stated. 
 
 ### Clustering
 Dataset and output directory required.
@@ -42,5 +63,4 @@ Output directory required. Uses generated conserved block support data from most
 ## Pretrained Embedding Model
 [dna2vec](https://arxiv.org/abs/1701.06279)
 
-Not currently in use.
-
+Currently only used for the list of all 8-mers stored in `utils/8mers.txt`.
