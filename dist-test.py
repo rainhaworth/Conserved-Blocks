@@ -8,9 +8,11 @@ import tensorflow as tf
 
 # set max length
 #max_len = 4096
-max_len = 512
+#max_len = 512
+max_len = 2048
+k = 4
 
-itokens, otokens = dd.LoadKmerDict('./utils/8mers.txt')
+itokens, otokens = dd.LoadKmerDict('./utils/' + str(k) + 'mers.txt')
 #gen = dd.KmerDataGenerator('./data-tmp/', itokens, otokens, batch_size=1, max_len=max_len)
 
 print('tokens:', itokens.num(), otokens.num())
@@ -19,31 +21,34 @@ print('tokens:', itokens.num(), otokens.num())
 # make indexed list of all sequences
 seqs = dd.DataIndex('/fs/nexus-scratch/rhaworth/synth/', itokens, otokens, max_len=max_len, fasta=True)
 
-from tfv2transformer.transformer import Transformer, LRSchedulerPerStep
+from tfv2transformer.transformer import LRSchedulerPerStep
+from tfv2transformer.contrastive_encoder import ContrastiveEncoder
 
-d_model=256
-#d_model = 512
-#block_size = 64
+
+#d_model=256
+d_model = 512
+block_size = 64
 #s2s = Transformer(itokens, otokens, len_limit=512, d_model=d_model, d_inner_hid=512, \
 #                   n_head=8, layers=2, length=max_len, block_size=block_size, dropout=0.1)
-s2s = Transformer(itokens, otokens, len_limit=70, d_model=d_model, d_inner_hid=512, \
-                   n_head=8, layers=2, dropout=0.1)
+#s2s = Transformer(itokens, otokens, len_limit=70, d_model=d_model, d_inner_hid=512, \
+#                   n_head=8, layers=2, dropout=0.1)
+s2s = ContrastiveEncoder(itokens, len_limit=1024, d_model=d_model, d_inner_hid=512, \
+                   n_head=8, layers=2, length=max_len, block_size=block_size, dropout=0.1)
 
-#mfile = '/fs/nexus-scratch/rhaworth/models/tmp.model.h5'
-# intentionally missing model file; remove -broken
-mfile = '/fs/nexus-scratch/rhaworth/models/tfv2full.model.h5'
+
+mfile = '/fs/nexus-scratch/rhaworth/models/contrastive.model.h5'
 
 s2s.compile(Adam(0.001, 0.9, 0.98, epsilon=1e-9))
 try: s2s.model.load_weights(mfile)
 except: print('No model file found at', mfile)
 
 # make encoder-only model
-s2s.make_fast_decode_model()
+s2s.make_encode_model()
 
 # define distance metrics
 def cos_loss_dist(x, y):
-    cos_loss = -tf.reduce_sum([tf.math.l2_normalize(tf.squeeze(x)) @ tf.math.l2_normalize(tf.squeeze(y))])
-    return 1 - cos_loss
+    cos_loss = -tf.reduce_sum(tf.tensordot(tf.math.l2_normalize(tf.squeeze(x)), tf.math.l2_normalize(tf.squeeze(y)), 1))
+    return cos_loss
 
 def l1_dist(x, y):
     return tf.reduce_sum(x - y)
@@ -100,7 +105,7 @@ def seq2kmers(seq, k=8):
 
 # first random seq
 randseq1 = gen_seq(max_len)
-pred_1 = s2s.encode_model(seq2kmers(randseq1))
+pred_1 = s2s.encode_model(seq2kmers(randseq1, k))
 
 # test 1: identical strings/embeddings
 print("test 1 dist:", metric(pred_1, pred_1))
@@ -118,22 +123,22 @@ randseq2 = gen_seq(max_len)
 randseq1_block1 = randseq1[:pos] + block1 + randseq1[pos+block_len:]
 randseq2_block1 = randseq2[:pos] + block1 + randseq2[pos+block_len:]
 
-pred_test3_1 = s2s.encode_model(seq2kmers(randseq1_block1))
-pred_test3_2 = s2s.encode_model(seq2kmers(randseq2_block1))
+pred_test3_1 = s2s.encode_model(seq2kmers(randseq1_block1, k))
+pred_test3_2 = s2s.encode_model(seq2kmers(randseq2_block1, k))
 
 print("test 3 dist:", metric(pred_test3_1, pred_test3_2))
 
 # test 4: same blocks, different position
 pos2 = 300
 randseq2_block1_pos2 = randseq2[:pos2] + block1 + randseq2[pos2+block_len:]
-pred_test4 = s2s.encode_model(seq2kmers(randseq2_block1_pos2))
+pred_test4 = s2s.encode_model(seq2kmers(randseq2_block1_pos2, k))
 
 print("test 4 dist:", metric(pred_test3_1, pred_test4))
 
 # TODO: test 5 and 6
 
 # test 7: random strings
-pred_test7 = s2s.encode_model(seq2kmers(randseq2))
+pred_test7 = s2s.encode_model(seq2kmers(randseq2, k))
 print("test 7 dist:", metric(pred_1, pred_test7))
 
 # TODO: test 8

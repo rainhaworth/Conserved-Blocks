@@ -94,14 +94,14 @@ def KmerDataGenerator(dir, itokens, otokens, batch_size=64, k=8, max_len=999):
 
 # very basic generator of pairs of data with shared blocks
 # generates padded kmer lists
-def gen_simple_contrastive_data(max_len=4096, min_len=500, block_max=4096, block_min=500, batch_size=8, tokens=None, k=8):
+def gen_simple_contrastive_data(max_len=4096, min_len=500, block_max=None, block_min=None, batch_size=8, tokens=None, k=8):
     """Generate contrastive samples
 
     Parameters:
         max_len, min_len: bounds for total sequence length
         block_max, block_min: bounds for block length
         batch_size: fixed batch size to yield
-        tokens: tokens to represent kmers; leave as None to produce strings
+        tokens: tokens to represent kmers; leave as None to produce strings (not yet implemented)
         k: length of kmer
     Returns:
         A list of strings or a list of lists of kmers
@@ -113,9 +113,17 @@ def gen_simple_contrastive_data(max_len=4096, min_len=500, block_max=4096, block
 
     assert batch_size % 2 == 0
 
+    # set parameters
+    if block_max is None or block_max > max_len:
+        block_max = max_len
+    if block_min is None:
+        block_min = min_len
+    elif block_min > max_len:
+        block_min = max_len
+
     while True:
         # generate (batch_size/2) blocks
-        for _ in range(batch_size/2):
+        for _ in range(batch_size//2):
             block_length = random.randint(block_min, block_max)
             block = gen_seq(block_length)
 
@@ -126,9 +134,13 @@ def gen_simple_contrastive_data(max_len=4096, min_len=500, block_max=4096, block
                 if len_seq == block_length:
                     num_kmers = len(block) - k + 1
                     seqs[i].append([block[i:i+k] for i in range(num_kmers)])
+                    continue
                 seq = gen_seq(len_seq - block_length)
                 # insert block at random point
-                insert_point = random.randint(0, len(seq)-1)
+                if len(seq) < 2:
+                    insert_point = 0
+                else:
+                    insert_point = random.randint(0, len(seq)-1)
                 seq = seq[:insert_point] + block + seq[insert_point:]
                 
                 num_kmers = len(seq) - k + 1

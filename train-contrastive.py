@@ -6,12 +6,13 @@ import numpy as np
 from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *
 
-# set global max length and batch size
-max_len = 4096
-batch_size = 8
+# set global max length, batch size, and k
+max_len = 2048
+batch_size = 128
+k = 8
 
-itokens, otokens = dd.LoadKmerDict('./utils/8mers.txt')
-gen = dd.gen_simple_contrastive_data(max_len=max_len, batch_size=batch_size, tokens=itokens)
+itokens, otokens = dd.LoadKmerDict('./utils/' + str(k) + 'mers.txt', k=k)
+gen = dd.gen_simple_contrastive_data(max_len=max_len, batch_size=batch_size, tokens=itokens, k=k)
 #gen = dd.KmerDataGenerator('/fs/nexus-scratch/rhaworth/hmp-mini/', itokens, otokens, batch_size=4, max_len=max_len)
 
 print('seq 1 words:', itokens.num())

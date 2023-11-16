@@ -312,8 +312,9 @@ class ContrastiveEncoder:
 		self.encoder = SelfAttention(d_model, d_inner_hid, n_head, layers, length, block_size, dropout)
 		#self.target_layer = TimeDistributed(Dense(tokens.num(), use_bias=False))
 		# TODO: add projection head
-		# temporary hack: comment out target_layer and do this instead
-		self.target_layer = Dense(tokens.num(), use_bias=False)
+		# flatten and feed to dense layer
+		self.flattener = Flatten()
+		self.target_layer = Dense(d_inner_hid, use_bias=False)
 	
 	def compile(self, optimizer='adam', active_layers=999, batch_size=8):
 		src_seq_input = Input(shape=(None,), batch_size=batch_size, dtype='int32')
@@ -332,8 +333,8 @@ class ContrastiveEncoder:
 
 		enc_output = self.encoder(src_emb, src_seq, active_layers=active_layers)
 		#dec_output = self.decoder(tgt_emb, tgt_seq, src_seq, enc_output, active_layers=active_layers)	
-		final_output = self.target_layer(enc_output)
-		# TODO: at least flatten this thing, ideally reduce the dimensionality
+		flattened = self.flattener(enc_output)
+		final_output = self.target_layer(flattened)
 
 		def get_loss(y_pred, y_true):
 			y_true = tf.cast(y_true, 'int32')
@@ -415,7 +416,7 @@ class ContrastiveEncoder:
 		#loss = get_loss(final_output, tgt_true)
 		loss, logits, labels = contrastive_batch_loss(final_output)
 		self.ppl = K.exp(loss)
-		self.accu = get_accu(logits, labels) # not sure if this will work, comment out if it doesn't
+		#self.accu = get_accu(logits, labels)
 
 		#self.model = Model([src_seq_input, tgt_seq_input], final_output)
 		self.model = Model(inputs=src_seq_input, outputs=final_output)
@@ -424,6 +425,17 @@ class ContrastiveEncoder:
 		#self.model.add_metric(self.accu, name='accu')
 
 		self.model.compile(optimizer, None)
+
+	# eval model
+	def make_encode_model(self):
+		src_seq_input = Input(shape=(None,), dtype='int32')
+		src_emb = self.word_emb(src_seq_input)
+		if self.pos_emb: src_emb = add_layer([src_emb, self.pos_emb(src_seq_input)])
+		#src_emb = self.emb_dropout(src_emb)
+		enc_output = self.encoder(src_emb, src_seq_input)
+		flattened = self.flattener(enc_output)
+		final_output = self.target_layer(flattened)
+		self.encode_model = Model(src_seq_input, final_output)
 
 class PosEncodingLayer:
 	def __init__(self, max_len, d_emb):
