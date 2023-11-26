@@ -32,15 +32,17 @@ class SkewedAttention():
 		#	mmask = Lambda(lambda x:(-1e+9)*(1.-K.cast(x, 'float32')))(mask)
 		#	attn = Add()([attn, mmask])
 		
-		# skew along last dim; if three's a better way to do this, do that instead
-		attn = tf.stack([tf.roll(attn[:,i], -i, 1) for i in range(self.length)], axis=1)
+		# skew matrix by extracting diagonals and adding to form a matrix of the same size
+        # could probably also just compute sums of diagonals but this seems to work
+		attn = tf.linalg.diag_part(attn, k=(-(self.length-1), self.length-1))
+		attn = attn[:,:self.length] + tf.concat([attn[:,self.length:], tf.zeros((tf.shape(attn)[0], 1, self.length))], axis=1)
 
-		# compute column sums and sort
-		colsums = tf.reduce_sum(attn, axis=1)
-		colsums = tf.sort(colsums)
+		# compute scores by computing sums of skewed columns, i.e. diagonals
+		scores = tf.reduce_sum(attn, axis=1)
+		scores = tf.sort(scores)
 
 		# return column sums and attention values
-		return colsums, attn
+		return scores, attn
 
 class SimpleSkewBinary:
 	def __init__(self, tokens, d_model=256, length=1024, dropout=0.1):
@@ -65,8 +67,8 @@ class SimpleSkewBinary:
 		src_emb = self.word_emb(src_seq)
 		tgt_emb = self.word_emb(tgt_seq)
 
-		colsums, _ = self.skewatt(src_emb, tgt_emb)
-		pred = self.pred_layer(colsums)
+		scores, _ = self.skewatt(src_emb, tgt_emb)
+		pred = self.pred_layer(scores)
 
 		self.model = Model([src_seq_input, tgt_seq_input], pred)
 		self.model.compile(optimizer,
