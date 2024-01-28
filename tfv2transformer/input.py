@@ -56,7 +56,7 @@ def LoadFromDir(dir, k=8, max_len=999):
             if len(instr) < k:
                 continue
             # yield duplicates
-            yield [instr[:max_len+k-1], instr[:max_len+k-1]]
+            yield [instr[:max_len+k-1], instr[:max_len+k-1]], None # no metadata
 
 # load fasta data for KmerDataGenerator
 def LoadFromDirFasta(dir, k=8, max_len=999):
@@ -66,16 +66,19 @@ def LoadFromDirFasta(dir, k=8, max_len=999):
     for file in input_files:
         with open(file) as f:
             # loop over all lines
+            metadata = ''
             while True:
                 instr = f.readline()
                 if not instr:
                     break
-                # skip metadata and very short strings
+                # grab metadata
                 if instr[0] == '>' or len(instr) < k:
+                    metadata = instr[1:]
                     continue
                 # TODO: handle strings where len > max_len (split w/ redundancies)
                 # yield duplicates
-                yield [instr[:max_len+k-1], instr[:max_len+k-1]]
+                yield [instr[:max_len+k-1], instr[:max_len+k-1]], metadata
+                metadata = ''
 
 # generator: fetch batches of data and write function
 def KmerDataGenerator(dir, itokens, otokens, batch_size=64, k=8, max_len=999):
@@ -108,7 +111,7 @@ def gen_simple_contrastive_data(max_len=4096, min_len=500, block_max=None, block
         A list of strings or a list of lists of kmers
     """
     def gen_seq(length):
-        return ''.join(random.choice('ACGT') for _ in range(length))
+        return ''.join(np.random.choice(['A','C','G','T'], size=length))
     
     seqs = [[],[]]
 
@@ -168,7 +171,7 @@ def gen_simple_block_data_binary(max_len=4096, min_len=500, block_max=None, bloc
         A list of strings or a list of lists of kmers
     """
     def gen_seq(length):
-        return ''.join(random.choice('ACGT') for _ in range(length))
+        return ''.join(np.random.choice(['A','C','G','T'], size=length))
     def seq2kmers(seq):
         num_kmers = len(seq) - k + 1
         return [seq[i:i+k] for i in range(num_kmers)]
@@ -187,34 +190,38 @@ def gen_simple_block_data_binary(max_len=4096, min_len=500, block_max=None, bloc
         block_min = max_len
 
     while True:
-        # generate (batch_size/2) blocks
-        for _ in range(batch_size//2):
-            block_length = random.randint(block_min, block_max-1)
+        sample_labels = np.random.randint(2, size=batch_size)
+        block_lengths = np.random.randint(block_min, block_max-1, size=batch_size)
+        for idx in range(batch_size):
+            block_length = block_lengths[idx]
             block = gen_seq(block_length)
 
-            # generate positive labeled sequences
-            for i in range(2):
-                # make them at least large enough to hold the block
-                len_seq = random.randint(max(block_length, min_len), max_len-1)
-                if len_seq == block_length:
-                    seqs[i].append(seq2kmers(block))
-                    continue
-                seq = gen_seq(len_seq - block_length)
-                # insert block at random point
-                if len(seq) < 2:
-                    insert_point = 0
-                else:
-                    insert_point = random.randint(0, len(seq)-1)
-                seq = seq[:insert_point] + block + seq[insert_point:]
-                seq = seq[:max_len]
-                seqs[i].append(seq2kmers(seq))
-            labels.append(1)
-
-            # generate negative labeled sequences
-            seqs[0].append(seqs[random.randint(0,1)][-1])
-            randseq = gen_seq(random.randint(min_len, max_len-1))
-            seqs[1].append(seq2kmers(randseq))
-            labels.append(0)
+            if sample_labels[idx] == 1:
+                # generate positive labeled sequences
+                for i in range(2):
+                    # make them at least large enough to hold the block
+                    len_seq = random.randint(max(block_length, min_len), max_len-1)
+                    if len_seq == block_length:
+                        seqs[i].append(seq2kmers(block))
+                        continue
+                    seq = gen_seq(len_seq - block_length)
+                    # insert block at random point
+                    if len(seq) < 2:
+                        insert_point = 0
+                    else:
+                        insert_point = random.randint(0, len(seq)-1)
+                    seq = seq[:insert_point] + block + seq[insert_point:]
+                    seq = seq[:max_len]
+                    seqs[i].append(seq2kmers(seq))
+                    # TODO: perturb block and randomly add indels after first iteration
+                labels.append(1)
+            else:
+                # generate random negative labeled sequences; ignore minimum length
+                randseq1 = gen_seq(random.randint(k, max_len-1))
+                randseq2 = gen_seq(random.randint(k, max_len-1))
+                seqs[0].append(seq2kmers(randseq1))
+                seqs[1].append(seq2kmers(randseq2))
+                labels.append(0)
 
         # yield complete list of sequences
         a, b = pad_to_max(seqs[0], tokens, max_len), pad_to_max(seqs[1], tokens, max_len)
@@ -225,7 +232,7 @@ def gen_simple_block_data_binary(max_len=4096, min_len=500, block_max=None, bloc
 # build index of file data, stored in memory
 # store as sequences to save memory
 class DataIndex:
-    def __init__(self, dir, itokens, otokens, k=8, max_len=4096, split=False, fasta=False):
+    def __init__(self, dir, itokens, otokens, k=8, max_len=4096, split=False, fasta=False, metadata=False):
         # split: produce separate indices for each file
         # fasta: use LoadFromDirFasta vs LoadFromDir
         self.k = k
@@ -233,18 +240,23 @@ class DataIndex:
         self.otokens = otokens
         self.max_len = max_len
         self.split = split
+        self.mdindex = None
 
         if fasta:
             loadfn = LoadFromDirFasta
         else:
             loadfn = LoadFromDir
 
+        if metadata:
+            self.mdindex = []
         # TODO: from dir (.txt) vs from fasta
         self.index = []
         if split == False:
-            for ss in loadfn(dir, k, max_len):
+            for ss, md in loadfn(dir, k, max_len):
                 # just store X, drop Y
                 self.index.append(ss[0])
+                if metadata and md is not None:
+                    self.mdindex.append(md)
         else:
             # TODO: write function to avoid this duplicate code
             # grab all files
@@ -269,10 +281,15 @@ class DataIndex:
         # generate list of kmers, fetch tokens, pad
         num_kmers = len(data) - self.k + 1
         return pad_to_max(
-            [data[i:i+self.k] for i in range(num_kmers)],
+            [[data[i:i+self.k] for i in range(num_kmers)]],
             self.itokens, self.max_len
         )
     
+    def getmd(self, idx):
+        if self.mdindex is None:
+            return None
+        return self.mdindex[idx]
+
     def len(self):
         if self.split == False:
             return len(self.index)
