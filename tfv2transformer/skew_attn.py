@@ -10,15 +10,6 @@ from tensorflow.keras.callbacks import *
 from tensorflow.keras.initializers import *
 import tensorflow.keras.backend as K
 
-# import modified BigBird attention
-#import tfv2transformer.attention as attention
-
-try:
-	from tqdm import tqdm
-	from dataloader import TokenList, pad_to_longest
-	# for transformer
-except: pass
-
 class SkewedAttention():
 	def __init__(self, length, attn_dropout=0.1):
 		self.length = length

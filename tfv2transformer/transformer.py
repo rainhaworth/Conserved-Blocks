@@ -7,11 +7,7 @@ from tensorflow.keras.callbacks import *
 from tensorflow.keras.initializers import *
 import tensorflow.keras.backend as K
 
-try:
-	from tqdm import tqdm
-	from dataloader import TokenList, pad_to_longest
-	# for transformer
-except: pass
+from tqdm import tqdm
 
 class LayerNormalization(Layer):
 	def __init__(self, eps=1e-6, **kwargs):

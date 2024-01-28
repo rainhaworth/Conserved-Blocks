@@ -11,11 +11,7 @@ import tensorflow.keras.backend as K
 # import modified BigBird attention
 import tfv2transformer.attention as attention
 
-try:
-	from tqdm import tqdm
-	from dataloader import TokenList, pad_to_longest
-	# for transformer
-except: pass
+from tqdm import tqdm
 
 class LayerNormalization(Layer):
 	def __init__(self, eps=1e-6, **kwargs):
