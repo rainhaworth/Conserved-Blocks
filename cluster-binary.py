@@ -5,52 +5,53 @@ import csv # for writing data
 import tfv2transformer.input as dd
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.optimizers import *
-from tensorflow.keras.callbacks import *
+from tensorflow.keras.optimizers import Adam
 from tqdm.auto import tqdm
+import time
+import argparse
+
+# command line args
+parser = argparse.ArgumentParser()
+# model
+parser.add_argument('--max_len', default=4096, type=int)
+parser.add_argument('--batch_size', default=32, type=int)
+parser.add_argument('--k', default=4, type=int)
+parser.add_argument('--d_model', default=128, type=int)
+# clustering
+parser.add_argument('--cluster_batch_size', default=512, type=int)
+parser.add_argument('--iterations', default=15, type=int)
+args = parser.parse_args()
 
 # set global max length, batch size, and k
-max_len = 4096
-batch_size = 32 # this is the maximum we can achieve with the current settings
-k = 4
-d_model = 128
+max_len = args.max_len
+batch_size = args.batch_size
+k = args.k
+d_model = args.d_model
 
-# TODO: add modified dataindex instead of gen
+# load kmer dict
 itokens, otokens = dd.LoadKmerDict('./utils/' + str(k) + 'mers.txt', k=k)
-#gen = dd.gen_simple_block_data_binary(max_len=max_len, min_len=max_len//4, batch_size=batch_size, tokens=itokens, k=k)
-#gen = dd.KmerDataGenerator('/fs/nexus-scratch/rhaworth/hmp-mini/', itokens, otokens, batch_size=4, max_len=max_len)
 
-print('seq 1 words:', itokens.num())
-print('seq 2 words:', otokens.num()) # we don't use this here, go back and fix later
-
-#from tfv2transformer.transformer_sparse import LRSchedulerPerStep
+# initialize model
 from tfv2transformer.skew_attn import SimpleSkewBinary
-
 ssb = SimpleSkewBinary(itokens, d_model=d_model, length=max_len)
 
-mfile = '/fs/nexus-scratch/rhaworth/models/skew.model.h5'
-
-#lr_scheduler = LRSchedulerPerStep(d_model, 4000)
-#model_saver = ModelCheckpoint(mfile, monitor='loss', save_best_only=True, save_weights_only=True)
-
 # load weights
+mfile = '/fs/nexus-scratch/rhaworth/models/skew.model.h5'
 ssb.compile(Adam(0.001, 0.9, 0.98, epsilon=1e-9)) # can we just load this with no optimizer?
 try: ssb.model.load_weights(mfile)
 except: print('\nno model found')
 
-#ssb.model.summary()
-#if not os.path.isdir('models'): os.mkdir('models')
 
 ### CLUSTERING ###
-cluster_batch_size = 512
-iterations = 10
+
+cluster_batch_size = args.cluster_batch_size
+iterations = args.iterations
 boundary = 0.9
 
 dataset_path = '/fs/cbcb-lab/mpop/projects/premature_microbiome/assembly/'
 results_dir = '/fs/nexus-scratch/rhaworth/output/'
 
-# TODO: put real path into this, also make it use only one set of tokens ideally
-dataset = dd.DataIndex(dataset_path, itokens, otokens, k=k, max_len=max_len, fasta=True)
+dataset = dd.DataIndex(dataset_path, itokens, otokens, k=k, max_len=max_len, fasta=True, metadata=True)
 print('dataset size:', dataset.len())
 print('data shape:', np.shape(dataset.get(0)))
 
@@ -61,12 +62,16 @@ clusters = [] # list of sets of ints
 representatives = [] # list of ints
 representatives_prev = set() # avoid searching the entire dataset again for representatives we've seen before
 
-# define cluster update function
-# TODO: do this, for now just duplicate the code it's fine
-#def update_clusters(clusters, hits, x, y):
+# set start time
+start_time = time.time()
+
+# per-iteration metrics
+iter_times = []
+iter_clust_counts = []
+iter_seq_counts = []
 
 for iter in range(iterations):
-    print('iteration', iter+1)
+    print('iteration', iter)
 
     # 1. get mini-batch
 
@@ -80,12 +85,10 @@ for iter in range(iterations):
     for i, idx in enumerate(batch_idx):
         batch[i] = dataset.get(idx)
 
-    #batch = tf.random.uniform((cluster_batch_size, max_len), dtype=int)
-
     # 2. cluster mini-batch
 
     # get list of all (cluster_batch_size choose 2) unique combinations of samples
-    # TODO: could use a generator to save on memory, might be necessary for large cluster batches
+    # could use a generator to save on memory, might be necessary for large cluster batches
     unique_pairs = []
     for i in range(bsz):
         for j in range(i+1,bsz):
@@ -126,34 +129,61 @@ for iter in range(iterations):
                     clusters.append(set([x, y]))
 
     print('cluster count:', len(clusters))
-    
-    # skip everything else if no clusters
-    if len(clusters) == 0:
-        print('no clusters found; skipping to next iteration')
-        continue
+    iter_clust_counts.append(len(clusters))
 
     # 3. get representative sequence for each cluster
 
-    # TODO: use logits to find best representative
+    # TODO: try using logits to find best representative
     # for now just pick a random one and reset every time
     representatives = []
+    seqs_clustered = 0
     for cluster in clusters:
-        representatives.append(np.random.choice(list(cluster)))
+        # compute seqs_clustered, assuming no duplicates
+        seqs_clustered += len(cluster)
+        # get element with max multiplicity
+        max_multi = 0.0
+        max_elem = -1
+        for elem_idx in cluster:
+            md = dataset.getmd(elem_idx)
+            if md is None:
+                break
+            md = md.split()
+            for substr in md:
+                if 'multi=' in substr:
+                    multi = float(substr[6:])
+                    if multi > max_multi:
+                        max_multi = multi
+                        max_elem = elem_idx
+                    break # stop iterating over substrings
+                    
+        # set random representative if no multiplicity data
+        if max_elem == -1:
+            representatives.append(np.random.choice(list(cluster)))
+        else:
+            representatives.append(max_elem)
         # also update unclustered
         unclustered = unclustered.difference(cluster)
-
-    # 4. iterate over all unclustered data and predict vs representative sequences
 
     reps_to_check = set(representatives)
     reps_to_check = list(reps_to_check.difference(representatives_prev))
     unclist = list(unclustered)
+    
+    # skip to next iteration if we have no representatives
+    if len(reps_to_check) == 0:
+        print('no new cluster representatives found; skipping to next iteration')
+        iter_times.append(time.time() - start_time)
+        iter_seq_counts.append(seqs_clustered)
+        continue
+
+    # 4. iterate over all unclustered data and predict vs representative sequences
+
     for i in tqdm(range(0, len(unclustered), batch_size), 'searching full dataset'):
         # get batch of unclustered sequences
         x = np.zeros((batch_size, max_len))
         for j, idx in enumerate(unclist[i:i+batch_size]):
             x[j] = dataset.get(idx)
 
-        for repnum, rep in enumerate(reps_to_check):
+        for rep in reps_to_check:
             # get batch of representatives
             # TODO: generate these outside the inner loop
             y = np.zeros((batch_size, max_len))
@@ -167,8 +197,12 @@ for iter in range(iterations):
 
             # update cluster if we find any hits
             for hit in hits[0]:
+                # get cluster number; assume no duplicate representatives
+                repnum = representatives.index(rep)
+
                 idx = unclist[i + hit]
                 clusters[repnum].add(idx)
+                seqs_clustered += 1
 
     # 5. update list of remaining points in dataset + previously seen representatives
 
@@ -192,3 +226,29 @@ for iter in range(iterations):
     # continue to next iteration
     print('wrote cluster data to', outfilename)
     print('remaining unclustered data:', len(unclustered))
+    print('time elapsed:', time.time() - start_time)
+    iter_times.append(time.time() - start_time)
+    iter_seq_counts.append(seqs_clustered)
+
+# write final clusters to file
+outfile1 = os.path.join(results_dir, 'batchsz-' + str(cluster_batch_size) + '-clusters.csv')
+with open(outfile1, 'w') as f:
+    writer = csv.writer(f)
+    # header
+    writer.writerow(['ID', 'Rep', 'Members'])
+    for i, cluster in enumerate(clusters):
+        row = [i, representatives[i]]
+        row += list(cluster)
+        writer.writerow(row)
+
+# write per-iter metrics to file
+outfile2 = os.path.join(results_dir, 'batchsz-' + str(cluster_batch_size) + '-iters.csv')
+with open(outfile2, 'w') as f:
+    writer = csv.writer(f)
+    # header
+    writer.writerow(['Iter', 'Time', 'Clusters', 'Seqs'])
+    for i in range(len(iter_times)):
+        row = [i, iter_times[i], iter_clust_counts[i], iter_seq_counts[i]]
+        writer.writerow(row)
+
+print('completed execution. wrote final outputs to files.')

@@ -16,6 +16,7 @@ class SkewedAttention():
 		self.dropout = Dropout(attn_dropout)
 	def __call__(self, q, k): # TODO: add mask support for len < maxlen
 		# compute attention matrix as with scaled dot product attention
+		# equivalent but slightly slower: attn = tf.matmul(q, k, transpose_b=True) / temper
 		temper = tf.sqrt(tf.cast(tf.shape(k)[-1], dtype='float32'))
 		attn = Lambda(lambda x:K.batch_dot(x[0],x[1],axes=[2,2])/x[2])([q, k, temper])  # shape=(batch, q, k)
 		
@@ -24,7 +25,6 @@ class SkewedAttention():
 		#	attn = Add()([attn, mmask])
 		
 		# skew matrix by extracting diagonals and adding to form a matrix of the same size
-        # could probably also just compute sums of diagonals but this seems to work
 		attn = tf.linalg.diag_part(attn, k=(-(self.length-1), self.length-1))
 		attn = attn[:,:self.length] + tf.concat([attn[:,self.length:], tf.zeros((tf.shape(attn)[0], 1, self.length))], axis=1)
 
