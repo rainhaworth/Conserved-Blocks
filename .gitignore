@@ -20,3 +20,5 @@ data-*
 .vscode
 *.pyc
 *.sh
+*.out
+*.png

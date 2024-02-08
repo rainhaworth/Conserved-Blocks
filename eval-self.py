@@ -5,16 +5,27 @@ import tfv2transformer.input as dd
 import numpy as np
 import time
 from math import comb # for computing max number of hits
+import argparse
 
 import tensorflow as tf
 from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *
 
+parser = argparse.ArgumentParser()
+# model
+parser.add_argument('--max_len', default=4096, type=int)
+parser.add_argument('--batch_size', default=32, type=int)
+parser.add_argument('--k', default=4, type=int)
+parser.add_argument('--d_model', default=128, type=int)
+# eval
+parser.add_argument('-c', '--cluster_batch_size', default=512, type=int)
+args = parser.parse_args()
+
 # set global max length, batch size, and k
-max_len = 4096
-batch_size = 32
-k = 4
-d_model = 128
+max_len = args.max_len
+batch_size = args.batch_size
+k = args.k
+d_model = args.d_model
 
 # set decision boundary
 boundary = 0.9
@@ -41,11 +52,10 @@ except: print('\nno model found')
 dataset_path = '/fs/cbcb-lab/mpop/projects/premature_microbiome/assembly/'
 results_dir = '/fs/nexus-scratch/rhaworth/output/'
 blast_red_file = 'prem-micro-blast-reduced.txt'
-cluster_iter = 9 # iteration to look at
 
 dataset = dd.DataIndex(dataset_path, itokens, otokens, k=k, max_len=max_len, fasta=True, metadata=True)
 
-cluster_file = os.path.join(results_dir, 'iter-' + str(cluster_iter) + '-clusters.csv')
+cluster_file = os.path.join(results_dir, 'batchsz-' + str(args.cluster_batch_size) + '-clusters.csv')
 blast_red_file = os.path.join(results_dir, blast_red_file)
 
 # get list of sequence indices for each cluster
@@ -92,7 +102,15 @@ for i, cl_idx in enumerate(cluster_idxs):
             hits[i].append((current_pairs[0][hit], current_pairs[1][hit]))
             
 
-# print number of hits
 print('summary:')
 for i in range(len(hits)):
+    # don't print full list of hits
+    #print('cluster', i, ':', len(hits[i]), '/', maxhits[i], '({:.2f}%)'.format(100 * len(hits[i]) / maxhits[i]))
+
+    # print full list of hits
     print('cluster', i, ':', len(hits[i]), '/', maxhits[i], '({:.2f}%)'.format(100 * len(hits[i]) / maxhits[i]), hits[i])
+
+    # make gephi edge list CSV
+    print('gephi CSV begins here:')
+    for edge in hits[i]:
+        print(str(cluster_idxs[i][edge[0]]) + ';' + str(cluster_idxs[i][edge[1]]))
