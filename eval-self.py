@@ -20,6 +20,8 @@ parser.add_argument('--d_model', default=128, type=int)
 # eval
 parser.add_argument('-c', '--cluster_batch_size', default=512, type=int)
 args = parser.parse_args()
+# output
+parser.add_argument('--output', type=str, choices={'summary', 'allhits', 'gephicsv'}, default='summary')
 
 # set global max length, batch size, and k
 max_len = args.max_len
@@ -104,13 +106,13 @@ for i, cl_idx in enumerate(cluster_idxs):
 
 print('summary:')
 for i in range(len(hits)):
-    # don't print full list of hits
-    #print('cluster', i, ':', len(hits[i]), '/', maxhits[i], '({:.2f}%)'.format(100 * len(hits[i]) / maxhits[i]))
-
-    # print full list of hits
-    print('cluster', i, ':', len(hits[i]), '/', maxhits[i], '({:.2f}%)'.format(100 * len(hits[i]) / maxhits[i]), hits[i])
-
-    # make gephi edge list CSV
-    print('gephi CSV begins here:')
-    for edge in hits[i]:
-        print(str(cluster_idxs[i][edge[0]]) + ';' + str(cluster_idxs[i][edge[1]]))
+    if args.output == 'summary':
+        # don't print full list of hits
+        print('cluster', i, ':', len(hits[i]), '/', maxhits[i], '({:.2f}%)'.format(100 * len(hits[i]) / maxhits[i]))
+    elif args.output == 'allhits':
+        # print full list of hits
+        print('cluster', i, ':', len(hits[i]), '/', maxhits[i], '({:.2f}%)'.format(100 * len(hits[i]) / maxhits[i]), hits[i])
+    elif args.output == 'gephicsv':
+        # make gephi edge list CSV
+        for edge in hits[i]:
+            print(str(cluster_idxs[i][edge[0]]) + ';' + str(cluster_idxs[i][edge[1]]))

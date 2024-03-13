@@ -16,6 +16,8 @@ parser.add_argument('--d_model', default=128, type=int)
 # eval
 parser.add_argument('-c', '--cluster_batch_size', default=512, type=int)
 args = parser.parse_args()
+# output
+parser.add_argument('--output', type=str, choices={'summary', 'allhits', 'gephicsv'}, default='summary')
 
 # set global max length, batch size, and k
 max_len = args.max_len
@@ -60,7 +62,11 @@ cluster_mds = []
 for cl in cluster_idxs:
     mds = []
     for e in cl:
-        mds.append(dataset.getmd(e)[:-1])
+        md = dataset.getmd(e)
+        if md is None:
+            print('no metadata found for sequence', e)
+        else:
+            mds.append(md[:-1])
     cluster_mds.append(mds)
 
 all_cluster_mds = []
@@ -116,8 +122,13 @@ with open(blast_red_file, 'r') as f:
 # print number of hits
 print('summary:')
 for i in range(len(hits)):
-    # don't print full list of hits
-    #print('cluster', i, ':', len(hits[i]), '/', maxhits[i], '({:.2f}%)'.format(100 * len(hits[i]) / maxhits[i]))
-
-    # print full list of hits
-    print('cluster', i, ':', len(hits[i]), '/', maxhits[i], '({:.2f}%)'.format(100 * len(hits[i]) / maxhits[i]), hits[i])
+    if args.output == 'summary':
+        # don't print full list of hits
+        print('cluster', i, ':', len(hits[i]), '/', maxhits[i], '({:.2f}%)'.format(100 * len(hits[i]) / maxhits[i]))
+    elif args.output == 'allhits':
+        # print full list of hits
+        print('cluster', i, ':', len(hits[i]), '/', maxhits[i], '({:.2f}%)'.format(100 * len(hits[i]) / maxhits[i]), hits[i])
+    elif args.output == 'gephicsv':
+        # make gephi edge list CSV
+        for edge in hits[i]:
+            print(str(cluster_idxs[i][edge[0]]) + ';' + str(cluster_idxs[i][edge[1]]))
