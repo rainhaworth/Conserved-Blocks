@@ -2,22 +2,21 @@
 # modified from en2de_main.py and pinyin_main.py
 import os, sys
 import tfv2transformer.input as dd
+from tfv2transformer.gensynth import gen_simple_block_data_binary
 import numpy as np
 from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *
 
 # set global max and min length, batch size, and k
-max_len = 4096 
+max_len = 4096
 min_len = max_len//4
-batch_size = 8
+batch_size = 32
 k = 4
 
-itokens, otokens = dd.LoadKmerDict('./utils/' + str(k) + 'mers.txt', k=k)
-gen = dd.gen_simple_block_data_binary(max_len=max_len, min_len=min_len, batch_size=batch_size, tokens=itokens, k=k)
-#gen = dd.KmerDataGenerator('/fs/nexus-scratch/rhaworth/hmp-mini/', itokens, otokens, batch_size=4, max_len=max_len)
+itokens, _ = dd.LoadKmerDict('./utils/' + str(k) + 'mers.txt', k=k)
+gen = gen_simple_block_data_binary(max_len=max_len, min_len=min_len, batch_size=batch_size, tokens=itokens, k=k)
 
-print('seq 1 words:', itokens.num())
-print('seq 2 words:', otokens.num()) # we don't use this here, go back and fix later
+print('kmer dict size:', itokens.num())
 
 from tfv2transformer.transformer_sparse import LRSchedulerPerStep
 from tfv2transformer.skew_attn import SimpleSkewBinary
@@ -39,7 +38,7 @@ if 'eval' in sys.argv:
 elif 'test' in sys.argv:
     print('not implemented')
 else:
-    #ssb.model.summary()
+    ssb.model.summary()
     if not os.path.isdir('models'): os.mkdir('models')
     ssb.model.fit(gen, steps_per_epoch=100, epochs=15, \
                 #validation_data=([Xvalid, Yvalid], None), \
