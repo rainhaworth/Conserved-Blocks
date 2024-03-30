@@ -116,6 +116,7 @@ def gen_adversarial_block_data_binary(max_len=4096, min_len=500, block_max=None,
         block_min = max_len
 
     while True:
+        # pre-generate random number batches
         block_lengths_T = np.random.randint(block_min, block_max-1, size=batch_size//2)
         block_lengths_F = np.random.randint(k, block_min-1,  size=batch_size//2)
 
@@ -127,101 +128,94 @@ def gen_adversarial_block_data_binary(max_len=4096, min_len=500, block_max=None,
             label = idx % 2
             labels.append(label)
 
-            # generate first sequence randomly
+            # generate conserved block
             if label == 1:
                 block_length = block_lengths_T[idx // 2]
-                seq1 = gen_seq(np.random.randint(max(block_length, min_len), max_len))
             else:
                 block_length = block_lengths_F[idx // 2]
-                seq1 = gen_seq(np.random.randint(max(block_length, k), max_len))
-            seqs[0].append(seq2kmers(seq1))
+            block = gen_seq(block_length)
 
-            # get conserved "block" as substring of seq1
-            if len(seq1) - block_length <= 0:
-                block = seq1
-            else:
-                block_idx = np.random.randint(0, len(seq1)-block_length)
-                block = seq1[block_idx:block_idx+block_length]
+            # generate sequences: perturb block then insert into new sequence
+            for seqnum in range(2):
+                # DELETIONS
 
-            # DELETIONS
+                # compute number of insertions and deletions to perform
+                count_ins = round(ins_fracs[idx] * indel_counts[idx])
+                count_del = indel_counts[idx] - count_ins
 
-            # compute number of insertions and deletions to perform
-            count_ins = round(ins_fracs[idx] * indel_counts[idx])
-            count_del = indel_counts[idx] - count_ins
-
-            if count_del > 0:
-                # compute total number of nucleotides to delete
-                if label == 0:
-                    if count_del >= block_length - k:
-                        size_del = block_length - k
+                if count_del > 0:
+                    # compute total number of nucleotides to delete
+                    if label == 0:
+                        if count_del >= block_length - k:
+                            size_del = block_length - k
+                        else:
+                            size_del = np.random.randint(count_del, block_length-k)
+                    elif block_length - block_min <= count_del:
+                        size_del = block_length - block_min
                     else:
-                        size_del = np.random.randint(count_del, block_length-k)
-                elif block_length - block_min <= count_del:
-                    size_del = block_length - block_min
-                else:
-                    size_del = np.random.randint(count_del, block_length - block_min)
-                # for each individual deletion event (slightly smaller due to truncation)
-                sizes_del = (np.random.dirichlet(np.ones(count_del)) * size_del).astype(int)
+                        size_del = np.random.randint(count_del, block_length - block_min)
+                    # for each individual deletion event (slightly smaller due to truncation)
+                    sizes_del = (np.random.dirichlet(np.ones(count_del)) * size_del).astype(int)
 
-                # simulate deletion events
-                for dsz in sizes_del:
-                    if len(block) - dsz <= 0:
-                        block = block[:k]
-                        continue
-                    pos_del = np.random.randint(0, len(block) - dsz)
-                    block = block[:pos_del] + block[pos_del+dsz:]
-            
-            # SUBSTITUTIONS
-            
-            # compute number of random substitutions to perform
-            count_sub = np.random.binomial(len(block), prob_sub)
-            if label == 1:
-                count_sub = min(count_sub, len(block) - block_min)
-            else:
-                count_sub = min(count_sub, len(block) - k)
-
-            # simulate substitution events
-            if count_sub > 0:
-                seq_sub = gen_seq(count_sub)
-                idx_sub = sorted(random.sample(range(len(block)), count_sub))
-
-                newblock = block[0:idx_sub[0]]
-                for i in range(count_sub-1):
-                    newblock += seq_sub[i]
-                    newblock += block[idx_sub[i]+1:idx_sub[i+1]]
-                newblock += seq_sub[-1]
-                if idx_sub[-1]+1 < len(block):
-                    newblock += block[idx_sub[-1]+1:]
+                    # simulate deletion events
+                    for dsz in sizes_del:
+                        if len(block) - dsz <= 0:
+                            block = block[:k]
+                            continue
+                        pos_del = np.random.randint(0, len(block) - dsz)
+                        block = block[:pos_del] + block[pos_del+dsz:]
                 
-                block = newblock
+                # SUBSTITUTIONS
+                
+                # compute number of random substitutions to perform
+                count_sub = np.random.binomial(len(block), prob_sub)
+                if label == 1:
+                    count_sub = min(count_sub, len(block) - block_min)
+                else:
+                    count_sub = min(count_sub, len(block) - k)
 
-            # ASSEMBLY AND INSERTIONS
-            
-            # if block is huge, skip all of this
-            if max_len - len(block) <= k:
-                seqs[1].append(seq2kmers(block))
-                continue
-            
-            # generate random part of seq2
-            seq2_rand = gen_seq(np.random.randint(k, max_len-len(block)))
+                # simulate substitution events
+                if count_sub > 0:
+                    seq_sub = gen_seq(count_sub)
+                    idx_sub = sorted(random.sample(range(len(block)), count_sub))
 
-            # choose (count_ins+1) insertion points; model insertion by breaking into fragments
-            if count_ins+1 > min(len(seq2_rand), len(block)):
-                count_ins = min(len(seq2_rand), len(block))-1
+                    newblock = block[0:idx_sub[0]]
+                    for i in range(count_sub-1):
+                        newblock += seq_sub[i]
+                        newblock += block[idx_sub[i]+1:idx_sub[i+1]]
+                    newblock += seq_sub[-1]
+                    if idx_sub[-1]+1 < len(block):
+                        newblock += block[idx_sub[-1]+1:]
+                    
+                    block = newblock
 
-            pos_new_ins = sorted(random.sample(range(len(seq2_rand)), count_ins+1))
-            pos_block_ins = sorted(random.sample(range(len(block)), count_ins))
-            pos_block_ins.insert(0, 0) # set first insertion point to 0
+                # ASSEMBLY AND INSERTIONS
+                
+                # if block is huge, skip all of this
+                if max_len - len(block) <= k:
+                    seqs[seqnum].append(seq2kmers(block))
+                    continue
+                
+                # generate random part of seq
+                seq_rand = gen_seq(np.random.randint(k, max_len-len(block)))
 
-            # assemble sequence
-            seq2 = seq2_rand[0:pos_new_ins[0]]
-            for i in range(count_ins):
-                seq2 += block[pos_block_ins[i]:pos_block_ins[i+1]]
-                seq2 += seq2_rand[pos_new_ins[i]:pos_new_ins[i+1]]
-            seq2 += block[pos_block_ins[-1]:]
-            seq2 += seq2_rand[pos_new_ins[-1]:]
+                # choose (count_ins+1) insertion points; model insertion by breaking into fragments
+                if count_ins+1 > min(len(seq_rand), len(block)):
+                    count_ins = min(len(seq_rand), len(block))-1
 
-            seqs[1].append(seq2kmers(seq2))
+                pos_new_ins = sorted(random.sample(range(len(seq_rand)), count_ins+1))
+                pos_block_ins = sorted(random.sample(range(len(block)), count_ins))
+                pos_block_ins.insert(0, 0) # set first insertion point to 0
+
+                # assemble sequence
+                seq = seq_rand[0:pos_new_ins[0]]
+                for i in range(count_ins):
+                    seq += block[pos_block_ins[i]:pos_block_ins[i+1]]
+                    seq += seq_rand[pos_new_ins[i]:pos_new_ins[i+1]]
+                seq += block[pos_block_ins[-1]:]
+                seq += seq_rand[pos_new_ins[-1]:]
+
+                seqs[seqnum].append(seq2kmers(seq))
 
         # yield complete list of sequences
         a, b = pad_to_max(seqs[0], tokens, max_len), pad_to_max(seqs[1], tokens, max_len)
