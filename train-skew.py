@@ -2,7 +2,7 @@
 # modified from en2de_main.py and pinyin_main.py
 import os, sys
 import tfv2transformer.input as dd
-from tfv2transformer.gensynth import gen_simple_block_data_binary
+import tfv2transformer.gensynth as gs
 import numpy as np
 from tensorflow.keras.optimizers import *
 from tensorflow.keras.callbacks import *
@@ -14,7 +14,7 @@ batch_size = 32
 k = 4
 
 itokens, _ = dd.LoadKmerDict('./utils/' + str(k) + 'mers.txt', k=k)
-gen = gen_simple_block_data_binary(max_len=max_len, min_len=min_len, batch_size=batch_size, tokens=itokens, k=k)
+gen = gs.gen_adversarial_block_data_binary(max_len=max_len, min_len=min_len, batch_size=batch_size, tokens=itokens, k=k)
 
 print('kmer dict size:', itokens.num())
 
@@ -24,7 +24,7 @@ from tfv2transformer.skew_attn import SimpleSkewBinary
 d_model = 128
 ssb = SimpleSkewBinary(itokens, d_model=d_model, length=max_len)
 
-mfile = '/fs/nexus-scratch/rhaworth/models/skew.model.h5'
+mfile = '/fs/nexus-scratch/rhaworth/models/skew.test.model.h5'
 
 lr_scheduler = LRSchedulerPerStep(d_model, 4000)
 model_saver = ModelCheckpoint(mfile, monitor='loss', save_best_only=True, save_weights_only=True)
