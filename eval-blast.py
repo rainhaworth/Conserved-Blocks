@@ -1,7 +1,7 @@
 # inspect clusters
 import os
 import csv # for writing data
-import tfv2transformer.input as dd
+import model.input as dd
 import numpy as np
 import time
 from math import comb # for computing max number of hits

@@ -1,7 +1,7 @@
 # output fasta file containing all cluster members
 import os
 import csv
-import tfv2transformer.input as dd
+import model.input as dd
 import numpy as np
 import time
 from math import comb # for computing max number of hits

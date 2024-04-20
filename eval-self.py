@@ -1,7 +1,7 @@
 # inspect clusters with SCA
 import os, sys
 import csv # for writing data
-import tfv2transformer.input as dd
+import model.input as dd
 import numpy as np
 import time
 from math import comb # for computing max number of hits
@@ -39,7 +39,7 @@ itokens, otokens = dd.LoadKmerDict('./utils/' + str(k) + 'mers.txt', k=k)
 
 # load model
 
-from tfv2transformer.skew_attn import SimpleSkewBinary
+from model.skew_attn import SimpleSkewBinary
 
 ssb = SimpleSkewBinary(itokens, d_model=d_model, length=max_len)
 

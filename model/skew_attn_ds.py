@@ -31,7 +31,7 @@ class SkewedAttention():
 		attn = tf.concat([attn_partial, attn[:,self.length//d:self.length]], axis=1)
 
 		# compute scores by computing sums of skewed columns, i.e. diagonals
-		scores = tf.reduce_mean(attn, axis=2)
+		scores = tf.reduce_sum(attn, axis=2)
 		scores = tf.sort(scores)
 
 		# return column sums and attention values
