@@ -45,10 +45,11 @@ class SimpleSkewBinary:
 		#self.emb_dropout = Dropout(dropout)
 
 		self.word_emb = Embedding(tokens.num(), d_emb)
+		#self.avgpool = AveragePooling1D(16, 16) # test; TODO: add argument if good
 		self.skewatt = SkewedAttention(length)
 		self.pred_layer = Dense(1, activation='sigmoid')
 
-	def compile(self, optimizer='adam'):
+	def compile(self, optimizer='adam', lam_FN=50):
 		src_seq_input = Input(shape=(self.length,), dtype='int32')
 		tgt_seq_input = Input(shape=(self.length,), dtype='int32')
 
@@ -58,13 +59,32 @@ class SimpleSkewBinary:
 		src_emb = self.word_emb(src_seq)
 		tgt_emb = self.word_emb(tgt_seq)
 
+		#src_emb = self.avgpool(src_emb)
+		#tgt_emb = self.avgpool(tgt_emb)
+
 		scores, _ = self.skewatt(src_emb, tgt_emb)
 		pred = self.pred_layer(scores)
 
+		def bloom_loss(y_true, y_pred):
+			binary_loss = tf.keras.losses.binary_crossentropy(y_true, y_pred, from_logits=False)
+
+			P_mask = tf.equal(y_true, 1)
+			PN_mask = tf.less(y_pred, 0.5)
+			true_FN = y_true * tf.cast(P_mask, 'int32') * tf.cast(PN_mask, 'int32')
+			pred_FN = y_pred * tf.cast(P_mask, 'float32') * tf.cast(PN_mask, 'float32')
+
+			FN_loss = tf.keras.losses.binary_crossentropy(true_FN, pred_FN, from_logits=False)
+
+			return binary_loss + lam_FN*FN_loss
+
 		self.model = Model([src_seq_input, tgt_seq_input], pred)
 		self.model.compile(optimizer,
-					 tf.keras.losses.BinaryCrossentropy(from_logits=False), 
-					 tf.keras.metrics.BinaryAccuracy())
+					 #loss=tf.keras.losses.BinaryCrossentropy(from_logits=False),
+					 loss=bloom_loss,
+					 metrics=[
+						 tf.keras.metrics.BinaryAccuracy(),
+						 tf.keras.metrics.Recall()
+						 ])
 
 add_layer = Lambda(lambda x:x[0]+x[1], output_shape=lambda x:x[0])
 # use this because keras may get wrong shapes with Add()([])

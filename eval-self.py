@@ -19,9 +19,10 @@ parser.add_argument('--k', default=4, type=int)
 parser.add_argument('--d_model', default=128, type=int)
 # eval
 parser.add_argument('-c', '--cluster_batch_size', default=512, type=int)
-args = parser.parse_args()
 # output
 parser.add_argument('--output', type=str, choices={'summary', 'allhits', 'gephicsv'}, default='summary')
+
+args = parser.parse_args()
 
 # set global max length, batch size, and k
 max_len = args.max_len
@@ -116,3 +117,8 @@ for i in range(len(hits)):
         # make gephi edge list CSV
         for edge in hits[i]:
             print(str(cluster_idxs[i][edge[0]]) + ';' + str(cluster_idxs[i][edge[1]]))
+
+# across all hits
+if args.output == 'summary' or args.output == 'allhits':
+    hit_nums = [len(hits[i]) for i in range(len(hits))]
+    print('total:', np.sum(hit_nums), '/', np.sum(maxhits), '({:.2f}%)'.format(100 * np.sum(hit_nums) / np.sum(maxhits)))

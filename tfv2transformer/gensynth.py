@@ -5,6 +5,13 @@ import random
 from tensorflow import constant, expand_dims
 from .input import pad_to_max
 
+# utility functions
+def gen_seq(length):
+    return ''.join(np.random.choice(['A','C','G','T'], size=length))
+def seq2kmers(seq, k):
+    num_kmers = len(seq) - k + 1
+    return [seq[i:i+k] for i in range(num_kmers)]
+
 # generate pairs of data with shared blocks
 # output = list of padded kmer lists
 # for binary classification
@@ -20,12 +27,6 @@ def gen_simple_block_data_binary(max_len=4096, min_len=500, block_max=None, bloc
     Returns:
         A list of strings or a list of lists of kmers
     """
-    def gen_seq(length):
-        return ''.join(np.random.choice(['A','C','G','T'], size=length))
-    def seq2kmers(seq):
-        num_kmers = len(seq) - k + 1
-        return [seq[i:i+k] for i in range(num_kmers)]
-    
     seqs = [[],[]]
     labels = []
 
@@ -52,7 +53,7 @@ def gen_simple_block_data_binary(max_len=4096, min_len=500, block_max=None, bloc
                     # make them at least large enough to hold the block
                     len_seq = random.randint(max(block_length, min_len), max_len-1)
                     if len_seq == block_length:
-                        seqs[i].append(seq2kmers(block))
+                        seqs[i].append(seq2kmers(block, k))
                         continue
                     seq = gen_seq(len_seq - block_length)
                     # insert block at random point
@@ -62,15 +63,15 @@ def gen_simple_block_data_binary(max_len=4096, min_len=500, block_max=None, bloc
                         insert_point = random.randint(0, len(seq)-1)
                     seq = seq[:insert_point] + block + seq[insert_point:]
                     seq = seq[:max_len]
-                    seqs[i].append(seq2kmers(seq))
+                    seqs[i].append(seq2kmers(seq, k))
                     # TODO: perturb block and randomly add indels after first iteration
                 labels.append(1)
             else:
                 # generate random negative labeled sequences; ignore minimum length
                 randseq1 = gen_seq(random.randint(k, max_len-1))
                 randseq2 = gen_seq(random.randint(k, max_len-1))
-                seqs[0].append(seq2kmers(randseq1))
-                seqs[1].append(seq2kmers(randseq2))
+                seqs[0].append(seq2kmers(randseq1, k))
+                seqs[1].append(seq2kmers(randseq2, k))
                 labels.append(0)
 
         # yield complete list of sequences
@@ -96,11 +97,6 @@ def gen_adversarial_block_data_binary(max_len=4096, min_len=500, block_max=None,
     Returns:
         A list of strings or a list of lists of kmers
     """
-    def gen_seq(length):
-        return ''.join(np.random.choice(['A','C','G','T'], size=length))
-    def seq2kmers(seq):
-        num_kmers = len(seq) - k + 1
-        return [seq[i:i+k] for i in range(num_kmers)]
     
     seqs = [[],[]]
     labels = []
@@ -193,7 +189,7 @@ def gen_adversarial_block_data_binary(max_len=4096, min_len=500, block_max=None,
                 
                 # if block is huge, skip all of this
                 if max_len - len(block) <= k:
-                    seqs[seqnum].append(seq2kmers(block))
+                    seqs[seqnum].append(seq2kmers(block, k))
                     continue
                 
                 # generate random part of seq
@@ -215,7 +211,7 @@ def gen_adversarial_block_data_binary(max_len=4096, min_len=500, block_max=None,
                 seq += block[pos_block_ins[-1]:]
                 seq += seq_rand[pos_new_ins[-1]:]
 
-                seqs[seqnum].append(seq2kmers(seq))
+                seqs[seqnum].append(seq2kmers(seq, k))
 
         # yield complete list of sequences
         a, b = pad_to_max(seqs[0], tokens, max_len), pad_to_max(seqs[1], tokens, max_len)
