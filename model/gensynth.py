@@ -41,7 +41,10 @@ def gen_simple_block_data_binary(max_len=4096, min_len=500, block_max=None, bloc
         block_min = max_len
 
     while True:
-        sample_labels = np.random.randint(2, size=batch_size)
+        # ensure labels are evenly balanced
+        sample_labels = np.concatenate([np.ones(batch_size//2), np.zeros(batch_size//2)])
+        np.random.shuffle(sample_labels)
+        
         block_lengths = np.random.randint(block_min, block_max-1, size=batch_size)
         for idx in range(batch_size):
             block_length = block_lengths[idx]
@@ -97,6 +100,8 @@ def gen_adversarial_block_data_binary(max_len=4096, min_len=500, block_max=None,
     Returns:
         A list of strings or a list of lists of kmers
     """
+
+    boundary_pad = 100
     
     seqs = [[],[]]
     labels = []
@@ -114,7 +119,7 @@ def gen_adversarial_block_data_binary(max_len=4096, min_len=500, block_max=None,
     while True:
         # pre-generate random number batches
         block_lengths_T = np.random.randint(block_min, block_max-1, size=batch_size//2)
-        block_lengths_F = np.random.randint(k, block_min-1,  size=batch_size//2)
+        block_lengths_F = np.random.randint(k, block_min-boundary_pad,  size=batch_size//2)
 
         indel_counts = np.random.poisson(exp_indel, size=batch_size)
         ins_fracs = np.random.uniform(size=batch_size)
