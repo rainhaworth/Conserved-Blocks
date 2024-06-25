@@ -2,8 +2,8 @@
 # requires tensorflow, so kept separate from input.py
 import numpy as np
 import random
-from tensorflow import constant, expand_dims
-from .input import pad_to_max
+from tensorflow import constant, expand_dims, ragged
+from .input import pad_to_max, pad_to_min_chunk
 
 # utility functions
 def gen_seq(length):
@@ -11,6 +11,14 @@ def gen_seq(length):
 def seq2kmers(seq, k):
     num_kmers = len(seq) - k + 1
     return [seq[i:i+k] for i in range(num_kmers)]
+
+def make_ragged(xs, tokens):
+    X = []
+    for i, x in enumerate(xs):
+        X.append([])
+        for j, z in enumerate(x):
+            X[i].append(tokens.id(z))
+    return ragged.constant(X)
 
 # generate pairs of data with shared blocks
 # output = list of padded kmer lists
@@ -40,11 +48,25 @@ def gen_simple_block_data_binary(max_len=4096, min_len=500, block_max=None, bloc
     elif block_min > max_len:
         block_min = max_len
 
+    # temporarily added random max_len per batch, sampled from hardcoded list of valid options
+    #max_lens = [4500, 7500, 15000]
+    max_len_init = max_len
+    min_chunk_pop = 0.8 # fraction of chunk that must be populated
+    chunksz = 2000 # hardcoded
+
+    # return integer: additional # of nucleotides to generate to meet chunk population bound
+    def round_to_pop(seqlen, pop, chunk):
+        if seqlen % chunk < chunk * pop and seqlen % chunk != 0:
+            return int(np.ceil(chunk * pop) - (seqlen % chunk))
+        return 0
+        
     while True:
+        max_len = np.random.randint(min_len*2, max_len_init)
+        block_max = max_len
         # ensure labels are evenly balanced
         sample_labels = np.concatenate([np.ones(batch_size//2), np.zeros(batch_size//2)])
         np.random.shuffle(sample_labels)
-        
+
         block_lengths = np.random.randint(block_min, block_max-1, size=batch_size)
         for idx in range(batch_size):
             block_length = block_lengths[idx]
@@ -54,7 +76,12 @@ def gen_simple_block_data_binary(max_len=4096, min_len=500, block_max=None, bloc
                 # generate positive labeled sequences
                 for i in range(2):
                     # make them at least large enough to hold the block
-                    len_seq = random.randint(max(block_length, min_len), max_len-1)
+                    len_seq = random.randint(max(block_length, min_len), max_len-1) # min_len -> max_len-k-block_length
+
+                    # ensure last chunk population bound is satisfied
+                    full_len = len_seq + block_length
+                    len_seq += round_to_pop(full_len, min_chunk_pop, chunksz)
+
                     if len_seq == block_length:
                         seqs[i].append(seq2kmers(block, k))
                         continue
@@ -67,18 +94,26 @@ def gen_simple_block_data_binary(max_len=4096, min_len=500, block_max=None, bloc
                     seq = seq[:insert_point] + block + seq[insert_point:]
                     seq = seq[:max_len]
                     seqs[i].append(seq2kmers(seq, k))
-                    # TODO: perturb block and randomly add indels after first iteration
                 labels.append(1)
             else:
                 # generate random negative labeled sequences; ignore minimum length
-                randseq1 = gen_seq(random.randint(k, max_len-1))
-                randseq2 = gen_seq(random.randint(k, max_len-1))
+                seq1_len = random.randint(min_len, max_len-1) # for ChunkHash, replaced k -> min_len
+                seq2_len = random.randint(min_len, max_len-1)
+                seq1_len += round_to_pop(seq1_len, min_chunk_pop, chunksz)
+                seq2_len += round_to_pop(seq2_len, min_chunk_pop, chunksz)
+                randseq1 = gen_seq(seq1_len) 
+                randseq2 = gen_seq(seq2_len)
                 seqs[0].append(seq2kmers(randseq1, k))
                 seqs[1].append(seq2kmers(randseq2, k))
                 labels.append(0)
 
         # yield complete list of sequences
-        a, b = pad_to_max(seqs[0], tokens, max_len), pad_to_max(seqs[1], tokens, max_len)
+        #a, b = pad_to_max(seqs[0], tokens, max_len), pad_to_max(seqs[1], tokens, max_len)
+        #a, b = make_ragged(seqs[0], tokens), make_ragged(seqs[1], tokens)
+        longest_a = len(max(seqs[0], key=len))
+        longest_b = len(max(seqs[1], key=len))
+        longest = max(longest_a, longest_b)
+        a, b = pad_to_min_chunk(seqs[0], tokens, longest, chunksz), pad_to_min_chunk(seqs[1], tokens, longest, chunksz)
         yield [a,b], expand_dims(constant(labels), axis=-1) # add dim to fix shape when training
         seqs = [[],[]]
         labels = []

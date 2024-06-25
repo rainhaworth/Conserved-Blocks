@@ -28,6 +28,16 @@ def pad_to_max(xs, tokens, max_len=999):
             X[i,j] = tokens.id(z)
     return X
 
+# pad to smallest length divisible by c that contains the longest sequence
+# requires length of longest sequence in batch
+def pad_to_min_chunk(xs, tokens, batch_longest, c=1024):
+    longest = int(np.ceil(batch_longest / c) * c)
+    X = np.zeros((len(xs), longest), dtype='int32')
+    for i, x in enumerate(xs):
+        for j, z in enumerate(x):
+            X[i,j] = tokens.id(z)
+    return X
+
 # load list of kmers from dna2vec, duplicate, return as itokens, otokens
 def LoadKmerDict(dict_file=None, k=8):
     if dict_file is None or os.path.exists(dict_file) == False:
@@ -97,7 +107,7 @@ class DataIndex:
             self.index.append(ss[0])
             self.seg_index.append(seg)
             if metadata and md is not None:
-                self.mdindex.append(md)
+                self.mdindex.append(md) # type: ignore
 
     def get(self, idx, file=None):
         # for indices split across multiple files, pass in the desired file number (array index)
