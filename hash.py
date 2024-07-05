@@ -2,15 +2,12 @@
 import os
 import pickle
 import model.input as dd
-import numpy as np
 from tqdm.auto import tqdm
-import glob
 import time
 import argparse
-from collections import defaultdict, Counter
 import tensorflow as tf
 
-from model.input import pad_to_min_chunk
+from model.input import pad_to_min_chunk, HashIndex
 
 # command line args
 parser = argparse.ArgumentParser()
@@ -44,12 +41,13 @@ except: print('\nno model found')
 ch.make_inference_model()
 
 # utility functions
-def maxlen_to_batch(maxlen, vram=24, res_layers=12): # 6 -> 12
+def maxlen_to_batch(maxlen, vram=24, res_layers=6):
     # vram in GB; TODO: fetch via nvidia-smi or tf.config.experimental.get_memory_info
     # assume padded to min chunk
     vram = vram * 1e9
     copy_mult = 6 + res_layers
-    capacity = vram // (d_model * copy_mult)
+    # also divide by float size (4 bytes)
+    capacity = vram // (4 * d_model * copy_mult)
     # compute batch size
     return capacity // maxlen
 
@@ -60,39 +58,17 @@ dataset_path = '/fs/cbcb-lab/mpop/projects/premature_microbiome/assembly/'
 results_dir = '/fs/nexus-scratch/rhaworth/output/'
 ext = 'fa'
 
-# get filenames
-filenames = glob.glob(os.path.join(dataset_path, '*.' + ext))
-print('files found:', len(filenames))
-
-# initialize index data structures
-hash_index = defaultdict(list)
-hash_counter = Counter()
+hash_index = HashIndex(dataset_path, ext)
+print('files found:', len(hash_index.filenames))
 
 # set start time
 start_time = time.time()
 
-for fileidx, filename in enumerate(filenames):
+for fileidx, filename in enumerate(hash_index.filenames):
     print('file', fileidx, ':', filename)
 
-    ### TODO: ###
-
     # read file, get sequences, sort by length
-
-    seqs = []
-
-    with open(filename, 'r') as f:
-        # loop over all lines
-        metadata = None
-        while True:
-            instr = f.readline()
-            if not instr:
-                break
-            # skip metadata lines
-            if instr[0] == '>' or len(instr) < k:
-                continue
-            seqs.append(instr)
-
-    seqs = sorted(seqs, key=len)
+    seqs = hash_index.seqs_from_file(fileidx)
 
     # enter loop until sequence list exahusted
     idx = len(seqs)-1
@@ -101,53 +77,55 @@ for fileidx, filename in enumerate(filenames):
         # get batch size, update idx
         maxlen = len(seqs[idx])
         bsz = maxlen_to_batch(maxlen)
+        #print(maxlen, bsz)
+
+        bsz = int(min(bsz, idx))
 
         # construct batch
-        batch = seqs[int(min(idx-bsz, 0)):idx+1]
+        batch = seqs[idx-bsz:idx+1]
 
         batch_tokens = pad_to_min_chunk(batch, itokens, maxlen, chunk_size)
         
-        # call model to get hash, convert to uint64, move to cpu
+        # call model to get hash
         hashes_binary = ch.hasher.predict(batch_tokens, verbose=0) # type: ignore
+
+        # binary (-1,1) to binary (0,1) to int
         hashes_binary = 0.5 * (1.0 + hashes_binary)
-        #
         hashes_int = tf.reduce_sum(tf.cast(hashes_binary, dtype=tf.int64) 
                                    * tf.cast(2, dtype=tf.int64) ** tf.range(tf.cast(hash_size, tf.int64)),
                                    axis=-1)
-        
+        # tensor to array
         hashes = hashes_int.numpy()
 
         # update index + counter
-        for seqnum, seqhashes in enumerate(hashes):
-            for chunknum, hash in enumerate(seqhashes):
-                # TODO: drop invalid hashes
+        for seqidx, seqhashes in enumerate(hashes):
+            for chunkidx, hash in enumerate(seqhashes):
+                # drop invalid hashes
+                if hash == 0:
+                    continue
                 # TODO: convert to short
-                index_data = (fileidx, seqnum, chunknum)
-                hash_index[hash].append(index_data)
-                hash_counter[hash] += 1
+                hash_index.add(hash, fileidx, seqidx, chunkidx)
 
         # update loop index + tqdm
         idx -= bsz
-        pbar.update(int(bsz))
+        pbar.update(bsz)
 
         # everything gets converted to float for some reason so fix that
         idx = int(idx)
         bsz = int(bsz)
 
+    pbar.close()
+
     # continue to next iteration
-    print('unique hashes:', len(hash_counter.keys()))
-    print('top 5 collisions:', hash_counter.most_common(5))
+    print('unique hashes:', len(hash_index.counter.keys()))
+    print('top 5 collisions:', hash_index.counter.most_common(5))
     print('time elapsed:', time.time() - start_time)
 
-print(hash_index)
+print(hash_index.counter)
 
 # write final index and counter to files
 outfile1 = os.path.join(results_dir, 'hashindex.pickle')
 with open(outfile1, 'wb') as f:
     pickle.dump(hash_index, f)
 
-outfile2 = os.path.join(results_dir, 'hashcounts.pickle')
-with open(outfile2, 'wb') as f:
-    pickle.dump(hash_counter, f)
-
-print('completed execution. wrote to', outfile1, 'and', outfile2, '.')
+print('completed execution. wrote to', outfile1, '.')

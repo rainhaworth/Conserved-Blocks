@@ -6,7 +6,7 @@ import tensorflow as tf
 # METRICS
 
 # add loss/metric hyperparameters here
-def hash_metric_factory(h=64, alpha=0.2, w_neg=1.0):
+def hash_metric_factory(h=64, alpha=0.2, w_neg=1.0, w_bal=0.5):
     # loss given pairwise labels
     def hash_loss(y_true, y_pred):
         # y_true: (b) labels
@@ -17,14 +17,8 @@ def hash_metric_factory(h=64, alpha=0.2, w_neg=1.0):
         ht1 = y_pred[0]
         ht2 = y_pred[1]
 
-        #ht1 = tf.sign(ht1)
-        #ht2 = tf.sign(ht2)
-
         # compute (b x n x n) dot product similarity tensor
         sims = tf.matmul(ht1, ht2, transpose_b=True) / h
-
-        # assume sim = 0.0 means at least one hash is invalid
-        #sims = tf.where(sims == 0.0, -1.0, sims)
 
         # find max for each (n x n) dot product matrix
         max_sim = tf.reduce_max(sims, axis=[-2,-1])
@@ -32,13 +26,22 @@ def hash_metric_factory(h=64, alpha=0.2, w_neg=1.0):
         mean_sim = tf.reduce_mean(sims, axis=[-2,-1])
         
         # HashNet loss, slightly modified
-        #loss = tf.math.log(1+tf.math.exp(alpha*max_sim)) - tf.cast(y_true, float) * max_sim * alpha
         loss_pos = tf.math.log(1+tf.math.exp(alpha*max_sim)) - max_sim * alpha
         loss_neg = tf.math.log(1+tf.math.exp(alpha*(mean_sim + max_sim)))
+        loss_hn = tf.where(y_true == 1, loss_pos, loss_neg * w_neg) # type: ignore
 
-        loss = tf.where(y_true == 1, loss_pos, loss_neg * w_neg) # type: ignore
+        loss = tf.reduce_sum(loss_hn)
 
-        return tf.reduce_sum(loss)
+        # hash balance loss: try to push each hash in a sequence to have different values
+        # (ideally want all hashes in each half-batch to have different values but that's expensive)
+
+        for ht in (ht1, ht2):
+            #(b x n x h) -> (b x n x n)
+            loss_bal = tf.matmul(ht, ht, transpose_b=True)
+            loss_bal -= tf.linalg.diag(tf.ones(tf.shape(loss_bal)[:-1]), padding_value=-1) # subtract I
+            loss += tf.reduce_mean(loss_bal) * w_bal
+
+        return loss
 
     # precision: fraction of samples with at least one exact match that are positives
     def hash_precision(y_true, y_pred):
@@ -88,12 +91,28 @@ def hash_metric_factory(h=64, alpha=0.2, w_neg=1.0):
 
         # average hash similarity
         #return tf.reduce_mean(hash_sims)
+    
+    # fraction of unique hashes; doesn't really need y_true but keras will get mad
+    def unique(y_true, y_pred):
+        # convert hashes to binary
+        hash_bin = tf.sign(y_pred)
+
+        # convert to int
+        hash_int = tf.reduce_sum(tf.cast(hash_bin, dtype=tf.int64) 
+                            * tf.cast(2, dtype=tf.int64) ** tf.range(tf.cast(h, tf.int64)),
+                            axis=-1)
+        
+        # flatten and get unique
+        hash_int = tf.reshape(hash_int, [-1])
+        hash_unique, _ = tf.unique(hash_int)
+
+        return tf.shape(hash_unique)[0] / tf.shape(hash_int)[0]
 
     # set names
-    hash_precision.__name__ = 'precision'
+    hash_precision.__name__ = 'prec'
     hash_recall.__name__ = 'recall'
 
-    return hash_loss, hash_precision, hash_recall
+    return hash_loss, hash_precision, hash_recall, unique
 
 # COMPONENTS
 
@@ -202,7 +221,7 @@ class ChunkHash:
             # add dimension
             hashes.append(hashes_raw)
         
-        hash_loss, hash_precision, hash_recall = hash_metric_factory(self.h)
+        hash_loss, hash_precision, hash_recall, _ = hash_metric_factory(self.h)
 
         # create model
         self.model = tf.keras.Model(inseqs, tf.stack(hashes, 0))
@@ -268,6 +287,13 @@ class DiscretizedChunkHash:
 
             # extract features
             emb_feats = self.extractor(emb)
+
+            # sort by norm
+            emb_feats_norm = tf.norm(emb_feats, axis=-1)
+            sorted_idx = tf.argsort(emb_feats_norm)
+            emb_feats = tf.gather(emb_feats, sorted_idx, axis=-2, batch_dims=1)
+
+            # reduce each chunk to 1 feature set
             chunk_feats = self.pool(emb_feats)
 
             # fix dims
@@ -282,13 +308,13 @@ class DiscretizedChunkHash:
             # add dimension
             hashes.append(hashes_raw)
 
-        hash_loss, hash_precision, hash_recall = hash_metric_factory(self.h, alpha=0.2)
+        hash_loss, hash_precision, hash_recall, unique = hash_metric_factory(self.h, alpha=0.2)
 
         # create model
         self.model = tf.keras.Model(inseqs, tf.stack(hashes, 0))
         self.model.compile(optimizer,
                            hash_loss, 
-                           [hash_precision, hash_recall]
+                           [hash_precision, hash_recall, unique]
                            )
         
     def make_inference_model(self, min_pop=0.8):

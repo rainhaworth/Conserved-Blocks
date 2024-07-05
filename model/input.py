@@ -2,6 +2,7 @@
 # also used for skewed cross-attention
 import os, glob
 import numpy as np
+from collections import defaultdict, Counter
 
 # custom TokenList and pad_to_longest; do not import from dataloader.py
 class TokenList:
@@ -139,6 +140,31 @@ class DataIndex:
             for file in self.index:
                 length += len(file)
             return length
+        
+# simple hash index wrapper for standardization
+class HashIndex:
+    def __init__(self, path, ext='fa'):
+        self.filenames = glob.glob(os.path.join(path, '*.' + ext))
+        self.index = defaultdict(list)
+        self.counter = Counter()
+
+    def add(self, hash, fileidx, seqidx=-1, chunkidx=-1):
+        self.index[hash].append((fileidx, seqidx, chunkidx))
+        self.counter[hash] += 1
+    
+    def seqs_from_file(self, fileidx, k=4):
+        seqs = []
+        with open(self.filenames[fileidx], 'r') as f:
+            while True:
+                instr = f.readline()
+                if not instr:
+                    break
+                # skip metadata lines
+                if instr[0] == '>' or len(instr) < k:
+                    continue
+                seqs.append(instr)
+        return sorted(seqs, key=len)
+
 
 if __name__ == '__main__':
     # test code
