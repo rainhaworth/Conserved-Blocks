@@ -69,6 +69,15 @@ for fileidx, filename in enumerate(hash_index.filenames):
 
     # read file, get sequences, sort by length
     seqs = hash_index.seqs_from_file(fileidx)
+    
+    """
+    # prune short sequences
+    seq_lens = [len(s) for s in seqs]
+    i = 0
+    # we could binary search but do this later
+    while seq_lens[i] < chunk_pop * chunk_size:
+        i += 1
+    seqs = seqs[i:]"""
 
     # enter loop until sequence list exahusted
     idx = len(seqs)-1
@@ -104,7 +113,8 @@ for fileidx, filename in enumerate(hash_index.filenames):
                 if hash == 0:
                     continue
                 # TODO: convert to short
-                hash_index.add(hash, fileidx, seqidx, chunkidx)
+                # convert seqidx from index in batch to index in seqs array
+                hash_index.add(hash, fileidx, seqidx + idx - bsz, chunkidx)
 
         # update loop index + tqdm
         idx -= bsz
