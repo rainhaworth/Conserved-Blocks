@@ -108,5 +108,6 @@ if __name__ == '__main__':
     # print in fasta format; pipe output to desired file
     for i in range(args.num):
         for j in range(2):
-            print('>' + str(i) + ',' + str(j))
+            print('>seq' + str(j))
+            #print('>' + str(i) + ',' + str(j))
             print(seqs[j][i])
