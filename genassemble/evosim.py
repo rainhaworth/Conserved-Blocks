@@ -12,8 +12,11 @@ def gen_seq(length, lst=False):
     return seq_lst
 
 # generate n pairs of identical-length sequences following evolution
-def sim_evo_fasta(seqlen=1024, n=10, prob_sub=0.05, exp_indel_count=1.0, exp_indel_size=5.0):
+def sim_evo_fasta(seqlen=1024, n=10, prob_sub=0.05, exp_indel_rate=0.01, exp_indel_size=5.0):
     seqs = [[],[]]
+
+    # convert from rate to count
+    exp_indel_count = exp_indel_rate * seqlen
 
     # indel sampling; fixed for each pair
     indel_counts = np.random.poisson(exp_indel_count, size=n)
@@ -98,8 +101,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-l', '--seqlen', default=2000, type=int)
     parser.add_argument('-n', '--num', default=10, type=int)
-    parser.add_argument('-p', '--prob_sub', default=0.05, type=float) # fraction of chunk that must be populated
-    parser.add_argument('-c', '--exp_indel_count', default=1.0, type=float)
+    parser.add_argument('-p', '--prob_sub', default=0.01, type=float)
+    parser.add_argument('-r', '--exp_indel_rate', default=0.001, type=float)
     parser.add_argument('-s', '--exp_indel_size', default=5.0, type=float)
     args = parser.parse_args()
 
