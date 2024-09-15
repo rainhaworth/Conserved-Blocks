@@ -106,7 +106,7 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--exp_indel_size', default=5.0, type=float)
     args = parser.parse_args()
 
-    seqs = sim_evo_fasta(args.seqlen, args.num, args.prob_sub, args.exp_indel_count, args.exp_indel_size)
+    seqs = sim_evo_fasta(args.seqlen, args.num, args.prob_sub, args.exp_indel_rate, args.exp_indel_size)
 
     # print in fasta format; pipe output to desired file
     for i in range(args.num):

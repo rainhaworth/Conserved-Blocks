@@ -11,11 +11,13 @@ nucm_files = glob.glob('nucm*.csv')
 params_file = 'params.csv'
 
 # read params
+print('reading params')
 with open(params_file, 'r') as f:
-    lengths = f.readline().split(',')
-    psubs = f.readline().split(',')
-    eirs = f.readline().split(',')
-    eiss = f.readline().split(',')
+    # get line -> split by ',' -> remove empty field
+    lengths = f.readline().split(',')[:-1]
+    psubs = f.readline().split(',')[:-1]
+    eirs = f.readline().split(',')[:-1]
+    eiss = f.readline().split(',')[:-1]
 
 # grid params
 nrow = len(lengths)

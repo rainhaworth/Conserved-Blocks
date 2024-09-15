@@ -52,6 +52,7 @@ do
             # expected indel size
             for eis in $eiss
             do
+                #echo "$seqlen, $psub, $eir, $eis"
                 python evosim.py -n 1 -l $seqlen -p $psub -r $eir -s $eis > test.fa
                 ~/art_bin_MountRainier/art_illumina -ss HSXn -sam -i test.fa -p -l 150 -f 20 -m 200 -s 10 -o testreads > /dev/null
                 # remove testmega if it exists; otherwise megahit won't run
@@ -65,8 +66,8 @@ do
                 split -l 2 test.fa
                 # align split files
                 /fs/nexus-scratch/rhaworth/mummer-4.0.0/bin/nucmer xaa xab
-                # compute score
-                /fs/nexus-scratch/rhaworth/mummer-4.0.0/bin/show-coords out.delta | tail --lines=+6 | awk -v sl="${seqlen}" '{total += ($7 + $8) * $10 / 100} END {printf total / (sl * 2)}' >> $nfn
+                # deduplicate and compute score as sum[(len 1 + len 2) * %idy] / (2*seqlen)
+                /fs/nexus-scratch/rhaworth/mummer-4.0.0/bin/show-coords out.delta | tail --lines=+6 | sort | uniq | awk -v sl="${seqlen}" '{total += ($7 + $8) * $10 / 100} END {printf total / (sl * 2)}' >> $nfn
                 echo -n "," >> $nfn
             done
             echo >> $mfn
