@@ -225,7 +225,7 @@ def hash_metric_factory_single(h=64, alpha=0.2, w_neg=1.0, w_bal=0.5):
     return hash_loss, hash_precision, hash_recall, unique
 
 # metrics for bucketing
-def bucket_metric_factory(n=32, h=64, alpha=0.2, w_neg=1.0, w_bal=0.5):
+def bucket_metric_factory(n=32, h=64, alpha=0.2, w_neg=1.0, w_bal=0.5, losstype='hinge'):
     # loss given pairwise labels
     def hash_loss(y_true, y_pred):
         # y_true: (b) labels
@@ -245,14 +245,27 @@ def bucket_metric_factory(n=32, h=64, alpha=0.2, w_neg=1.0, w_bal=0.5):
         dist = tf.norm(ht1 - ht2, axis=-1) # (b x n)
         min_dist = tf.reduce_min(dist, axis=-1) # (b)
 
-        # softplus loss
+        # compute loss
         z = min_dist - 1.0 # intentionally using 0.5 instead of 1.0 to shift to higher recall
         y_true = tf.cast(y_true, float) * 2.0 - 1.0 # type: ignore
-        loss_hn = tf.math.log(1+tf.math.exp(y_true * z))
-        #loss_hn = tf.maximum(tf.zeros_like(z), 1+y_true*z)
-
-        # hinge loss
-        #loss_hn = tf.maximum(tf.zeros_like(z), 1 + z * y_true)
+        if losstype == 'hinge':
+            loss_hn = tf.maximum(tf.zeros_like(z), 1+y_true*z)
+        elif losstype == 'softplus':
+            # softplus
+            #loss_hn = tf.math.log(1+tf.math.exp(y_true * z))
+            # softplus v2 generalized
+            alpha = 10.0 # a > 0
+            beta = 1.0 # b in [0, 1]
+            expa1b = tf.math.exp(alpha*(1-beta)) # this term gets reused a lot
+            const = tf.math.log(1+1/expa1b) / alpha + 1/(1+expa1b) # type: ignore
+            rescale = 1+1/expa1b
+            loss_hn = tf.math.log(1+tf.math.exp(alpha * (y_true * z + beta))) / alpha # type: ignore
+            loss_hn -= y_true*z/(1+expa1b) + const
+            loss_hn *= rescale
+        elif losstype == 'polynomial':
+            loss_hn = tf.maximum(tf.zeros_like(z), y_true*(z**3/3 + z) + z**2 + 1/3)
+            loss_hn *= 0.25 # type: ignore
+        
 
         loss = loss_hn #tf.reduce_mean(loss_hn)
 
@@ -438,6 +451,7 @@ class InceptionLayer(tf.keras.layers.Layer):
         self.filters = [tf.keras.layers.Conv1D(self.dim, f, activation='relu', padding='same')
                         for f in range(minlen, maxlen)]
         self.pool = tf.keras.layers.MaxPool1D(pool)
+        #self.norm = tf.keras.layers.LayerNormalization()
 
         self.reducers = [None for _ in range(len(self.filters))]
         if reduce:
@@ -452,10 +466,10 @@ class InceptionLayer(tf.keras.layers.Layer):
             if reducer != None:
                 o = reducer(o)
             o = filter(o)
-            o = self.pool(o)
+            #o = self.pool(o)
             out.append(o)
         # concat feature maps
-        return tf.concat(out, axis=-1)
+        return self.pool(tf.concat(out, axis=-1))
 
 # MLP for hashing
 class MLPHasher(tf.keras.layers.Layer):
@@ -721,16 +735,16 @@ class ChunkMultiHash:
 
         # feature extraction
         # init conv
-        self.conv_1 = tf.keras.layers.Conv1D(d, 8, activation='relu', padding='same')
+        self.conv_1 = tf.keras.layers.Conv1D(d, 32, activation='relu', padding='same')
         # dim reduction
         self.conv_pool = tf.keras.layers.MaxPool1D(2)
         # sequential convnet
         self.conv_layers = [self.conv_1, self.conv_pool, 
-                            ResBlock1D(dim=d, kernelsz=8, layernorm=True), self.conv_pool,
-                            #ResBlock1D(dim=d, kernelsz=8, layernorm=True), self.conv_pool,
+                            ResBlock1D(dim=d, kernelsz=16, layernorm=True), self.conv_pool,
+                            #ResBlock1D(dim=d, kernelsz=8, layernorm=True), #self.conv_pool,
+                            #ResBlock1D(dim=d, kernelsz=4, layernorm=True), #self.conv_pool, 
                             #ResBlock1D(dim=d, kernelsz=4, layernorm=True), self.conv_pool, 
-                            #ResBlock1D(dim=d, kernelsz=4, layernorm=True), self.conv_pool, 
-                            ResBlock1D(dim=d, kernelsz=8, layernorm=True)]
+                            ResBlock1D(dim=d, kernelsz=4, layernorm=True)]
 
         # edge extractors; outputs concatenated
         #self.edge_layers = [tf.keras.layers.Conv1D(d, f, activation='relu') for f in range(2, 10)]
@@ -745,8 +759,8 @@ class ChunkMultiHash:
 
         # hasher
         self.flatten = tf.keras.layers.Flatten()
-        self.hash_layer = SplitHasher(hashsz, n_hash, d)
-        #self.hash_layer = tf.keras.layers.Dense(hashsz*n_hash, activation='tanh') # for non-distributed do hashsz*n_hash
+        #self.hash_layer = SplitHasher(hashsz, n_hash, d)
+        self.hash_layer = tf.keras.layers.Dense(hashsz*n_hash, activation='tanh') # for non-distributed do hashsz*n_hash
         #self.hash_layer = MLPHasher(hashsz*n_hash)
         self.distributed_hash = tf.keras.layers.TimeDistributed(self.hash_layer)
 
@@ -773,12 +787,15 @@ class ChunkMultiHash:
                 x = layer(x)
 
             # apply inception layer
-            x = self.inception(x)
+            #x = self.inception(x)
             x = tf.math.l2_normalize(x, axis=-1)
-            hashes_raw = self.hash_layer(x)
-            #x = self.flatten(x)
-            #x = self.hash_layer(x)
-            #hashes_raw = tf.reshape(x, [-1, self.n, self.h])
+            #hashes_raw = self.hash_layer(x)
+            x = self.flatten(x)
+            # mask out nans
+            #mask = tf.math.is_finite(x)
+            #x = tf.where(mask, x, 0.0)
+            x = self.hash_layer(x)
+            hashes_raw = tf.reshape(x, [-1, self.n, self.h])
             
             """
             # reshape to (b x s x n x (d*16//n))

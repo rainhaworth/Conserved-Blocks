@@ -268,7 +268,7 @@ def gen_adversarial_block_data_binary(max_len=4096, min_len=500, block_max=None,
 
 # alt training regime: adversarial single chunks
 def gen_adversarial_chunks_binary(chunk_size=1024, min_pop=0.8, min_shared=512, boundary_pad=50,
-                                  prob_sub=0.01, exp_indel_count=5, exp_indel_size=5, 
+                                  prob_sub=0.01, exp_indel_rate=0.005, exp_indel_size=10, 
                                   batch_size=32, tokens=None, k=4):
     seqs = [[],[]]
     labels = []
@@ -279,13 +279,6 @@ def gen_adversarial_chunks_binary(chunk_size=1024, min_pop=0.8, min_shared=512, 
         # pre-generate random number batches
         shared_T = np.random.randint(min_shared, chunk_size-1, size=batch_size//2)
         shared_F = np.random.randint(k, min_shared-boundary_pad, size=batch_size//2)
-
-        # indel sampling; fixed for each pair
-        indel_counts = np.random.poisson(exp_indel_count, size=batch_size)
-        ins_fracs = np.random.uniform(size=batch_size)
-        indel_sizes = [np.random.poisson(exp_indel_size, size=ic) for ic in indel_counts]
-
-        ins_counts = np.int32(np.round(indel_counts * ins_fracs))
 
         for idx in range(batch_size):
             # alternate between true and false samples
@@ -299,15 +292,23 @@ def gen_adversarial_chunks_binary(chunk_size=1024, min_pop=0.8, min_shared=512, 
                 shared_length = shared_F[idx // 2]
             shared = gen_seq(shared_length)
 
+            # sample indel RVs
+            exp_indel_count = exp_indel_rate * shared_length
+            indel_count = np.random.poisson(exp_indel_count)
+            ins_frac = np.random.uniform()
+            indel_sizes = np.random.poisson(exp_indel_size, size=indel_count)
+
+            ins_count = np.int32(np.round(indel_count * ins_frac))
+
             # generate sequences: perturb then insert into new sequence
             for seqnum in range(2):
                 # SHARED REGION EVOLUTION
 
                 # DELETIONS
                 # insertions are listed first in indel_sizes, so skip them
-                for i in range(ins_counts[idx], indel_counts[idx]):
+                for i in range(ins_count, indel_count):
                     # get size
-                    dsz = indel_sizes[idx][i]
+                    dsz = indel_sizes[i]
                     
                     # if we would delete more than the full sequence, proceed with empty sequence
                     if len(shared) - dsz <= 0:
@@ -336,14 +337,17 @@ def gen_adversarial_chunks_binary(chunk_size=1024, min_pop=0.8, min_shared=512, 
                     shared = []
 
                 # INSERTIONS
-                for i in range(ins_counts[idx]):
+                for i in range(ins_count):
                     # generate new sequence and insert at random position
-                    isz = indel_sizes[idx][i]
+                    isz = indel_sizes[i]
                     ins_seq = list(gen_seq(isz, lst=True))
-                    ins_pos = np.random.randint(0, len(shared))
-                    
-                    # unfortunately this is the best way to insert multiple list elements in python
-                    shared[ins_pos:ins_pos] = ins_seq
+
+                    if len(shared) == 0:
+                        shared = ins_seq
+                    else:
+                        ins_pos = np.random.randint(0, len(shared))
+                        # unfortunately this is the best way to insert multiple list elements in python
+                        shared[ins_pos:ins_pos] = ins_seq
 
                 # convert back to string
                 shared = ''.join(shared)
@@ -365,10 +369,14 @@ def gen_adversarial_chunks_binary(chunk_size=1024, min_pop=0.8, min_shared=512, 
                     else:
                         seq_len = np.random.randint(min_seq_len, max_seq_len)
 
-                    # insert shared at random position
-                    seq = gen_seq(seq_len)
-                    seq_break = np.random.randint(0, len(seq))
-                    seq = seq[:seq_break] + shared + seq[seq_break:]
+                    if seq_len == 0:
+                        # corner case if we don't end up adding anything
+                        seq = shared
+                    else:
+                        # insert shared at random position
+                        seq = gen_seq(seq_len)
+                        seq_break = np.random.randint(0, len(seq))
+                        seq = seq[:seq_break] + shared + seq[seq_break:]
 
                 # list -> string -> kmers
                 seq = ''.join(seq)
