@@ -4,6 +4,10 @@ import numpy as np
 
 from .chunk_hash import bucket_metric_factory
 
+# helper function: less gross looking conv2d
+def conv2D(dim, kernel=1, stride=1):
+    return tf.keras.layers.Conv2D(dim, kernel, stride, 'same')
+
 # helper function: convert batch of sequences to batch of k^4 x k^4 kmer graphs w/ fixed separation
 def seqs2graphs(seqs, sep=1, k=4):
     # adjust for 0 = pad
@@ -23,21 +27,26 @@ def seqs2graphs(seqs, sep=1, k=4):
     return tf.scatter_nd(edges, updates, (bsz, gsz, gsz))
 
 class ResBlock2D(tf.keras.layers.Layer):
-    def __init__(self, dim=128, kernelsz=3, layers=2, layernorm=True, upsample=False):
+    def __init__(self, dim=128, kernelsz=3, layers=2, layernorm=True, project=False):
         super(ResBlock2D, self).__init__()
         self.layernorm = None
-        self.upsample = None
+        self.project = None
+        self.convs = []
+        self.relu = tf.keras.layers.ReLU()
+        # dimension increase version; assume dim = previous dim * 2
+        if project:
+            self.project = conv2D(dim, 1, 2)
+            self.convs.append(conv2D(dim, kernelsz, 2))
+            layers -= 1
         # create convolutional layers
-        self.convs = [tf.keras.layers.Conv2D(dim, kernelsz, padding='same') for _ in range(layers)]
+        self.convs += [conv2D(dim, kernelsz) for _ in range(layers)]
         if layernorm:
             self.layernorm = tf.keras.layers.LayerNormalization()
-        self.relu = tf.keras.layers.ReLU()
-        if upsample:
-            self.upsample = tf.keras.layers.Dense(dim, use_bias=False)
+            
     def call(self, x):
         x_init = x
-        if self.upsample is not None:
-            x_init = self.upsample(x_init)
+        if self.project is not None:
+            x_init = self.project(x_init)
         # convs, intermediate relus
         for conv in self.convs[:-1]:
             x = conv(x)
@@ -60,10 +69,15 @@ class GraphHash:
         self.k = k
         d = d_model
 
-        # small resnet encoder
-        self.enc_layers = [tf.keras.layers.Conv2D(d, 7, 2, padding='same'), tf.keras.layers.LayerNormalization(), tf.keras.layers.ReLU(),
+        # resnet-34 encoder
+        self.enc_layers = [conv2D(d, 7, 2), tf.keras.layers.LayerNormalization(), tf.keras.layers.ReLU(),
                            tf.keras.layers.MaxPool2D((3,3), 2, padding='same'),
-                           ResBlock2D(d), ResBlock2D(d), ResBlock2D(d)]
+                           ResBlock2D(d), ResBlock2D(d), ResBlock2D(d),
+                           ResBlock2D(d*2, project=True), ResBlock2D(d*2), ResBlock2D(d*2), ResBlock2D(d*2),
+                           ResBlock2D(d*4, project=True), ResBlock2D(d*4), ResBlock2D(d*4), ResBlock2D(d*4), ResBlock2D(d*4), ResBlock2D(d*4),
+                           ResBlock2D(d*8, project=True), ResBlock2D(d*8), ResBlock2D(d*8),
+                           #tf.keras.layers.GlobalAveragePooling2D()
+                           ]
         
         # hasher
         self.flatten = tf.keras.layers.Flatten()
