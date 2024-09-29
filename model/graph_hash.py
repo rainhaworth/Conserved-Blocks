@@ -1,8 +1,6 @@
 # kmer graph based encoder
 import tensorflow as tf
-import numpy as np
-
-from .chunk_hash import bucket_metric_factory
+from .hash_metrics import bucket_metric_factory
 
 # helper function: less gross looking conv2d
 def conv2D(dim, kernel=1, stride=1):
@@ -74,8 +72,9 @@ class GraphHash:
                            tf.keras.layers.MaxPool2D((3,3), 2, padding='same'),
                            ResBlock2D(d), ResBlock2D(d), ResBlock2D(d),
                            ResBlock2D(d*2, project=True), ResBlock2D(d*2), ResBlock2D(d*2), ResBlock2D(d*2),
-                           ResBlock2D(d*4, project=True), ResBlock2D(d*4), ResBlock2D(d*4), ResBlock2D(d*4), ResBlock2D(d*4), ResBlock2D(d*4),
+                           #ResBlock2D(d*4, project=True), ResBlock2D(d*4), ResBlock2D(d*4), ResBlock2D(d*4), ResBlock2D(d*4), ResBlock2D(d*4),
                            ResBlock2D(d*8, project=True), ResBlock2D(d*8), ResBlock2D(d*8),
+                           tf.keras.layers.MaxPooling2D((2,2))
                            #tf.keras.layers.GlobalAveragePooling2D()
                            ]
         
