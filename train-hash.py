@@ -17,6 +17,8 @@ parser.add_argument('-k', default=4, type=int)
 parser.add_argument('-d', '--d_model', default=64, type=int)
 parser.add_argument('-z', '--hashsz', default=64, type=int) # -h is help so we're using -z
 parser.add_argument('-n', '--n_hash', default=8, type=int)
+parser.add_argument('-e', '--encoder', default='chunk', type=str, choices=['chunk','graph','rnn','attn'])
+parser.add_argument('-i', '--interactive', action='store_true')
 args = parser.parse_args()
 
 chunksz = args.lenseq
@@ -26,6 +28,7 @@ k = args.k
 d_model = args.d_model
 hashsz = args.hashsz
 n_hash = args.n_hash # for bucketing approach
+enc = args.encoder
 
 itokens, _ = dd.LoadKmerDict('./utils/' + str(k) + 'mers.txt', k=k)
 #gen = gs.gen_adversarial_block_data_binary(max_len=max_len, min_len=min_len, batch_size=batch_size, tokens=itokens, k=k)
@@ -36,17 +39,16 @@ gen_train = gs.gen_adversarial_chunks_binary(chunk_size=chunksz, min_shared=min_
 
 print('kmer dict size:', itokens.num())
 
-from model.chunk_hash import DiscretizedChunkHash, ChunkHash, ChunkMultiHash
-
-#ssb = ChunkMultiHash(itokens, chunksz=chunksz, d_model=d_model, hashsz=hashsz, n_hash=n_hash)
-
+from model.chunk_hash import ChunkMultiHash
 from model.graph_hash import GraphHash
-
-#ssb = GraphHash(itokens, k, chunksz, d_model, hashsz=hashsz, n_hash=n_hash)
-
 from model.rnn_hash import GRUHash
 
-ssb = GRUHash(itokens, chunksz, d_model, hashsz, n_hash)
+if enc == 'chunk':
+    ssb = ChunkMultiHash(itokens, chunksz=chunksz, d_model=d_model, hashsz=hashsz, n_hash=n_hash)
+elif enc == 'graph':
+    ssb = GraphHash(itokens, k, chunksz, d_model, hashsz=hashsz, n_hash=n_hash)
+elif enc == 'rnn':
+    ssb = GRUHash(itokens, chunksz, d_model, hashsz, n_hash)
 
 def lr_schedule(epoch, lr):
     if epoch < 5:
@@ -73,8 +75,11 @@ if 'eval' in sys.argv:
 elif 'test' in sys.argv:
     print('not implemented')
 else:
-    ssb.model.summary()
-    ssb.model.fit(gen_train, steps_per_epoch=100, epochs=15, \
+    verbose = 2
+    if args.interactive:
+        ssb.model.summary()
+        verbose = 1
+    ssb.model.fit(gen_train, steps_per_epoch=100, epochs=15, verbose=verbose, \
                 #validation_data=([Xvalid, Yvalid], None), \
                 callbacks=[lr_scheduler,
                            #model_saver,
@@ -86,11 +91,11 @@ else:
     print('hard gen eval')
     gen_hard = gs.gen_adversarial_chunks_binary(chunk_size=chunksz, min_shared=min_len, batch_size=batch_size,
                                                 tokens=itokens, k=k, boundary_pad=20, min_pop=1.0)
-    ssb.model.evaluate(gen_hard, steps=100)
+    ssb.model.evaluate(gen_hard, steps=100, verbose=verbose)
 
     # check accuracy far from decision boundary
     print('simple gen eval')
     gen_simple = gs.gen_adversarial_chunks_binary(chunk_size=chunksz, min_shared=min_len, batch_size=batch_size,
                                                   prob_sub=0.0, exp_indel_rate=0.0, exp_indel_size=0,
                                                   tokens=itokens, k=k, boundary_pad=20, min_pop=1.0)
-    ssb.model.evaluate(gen_simple, steps=100)
+    ssb.model.evaluate(gen_simple, steps=100, verbose=verbose)
