@@ -170,6 +170,9 @@ class HashIndex:
         assert overlap < 1.0
         seqs = self.seqs_from_file(fileidx, k)
 
+        # adjust for kmer size; we want to end up with chunksz kmers later
+        chunksz = chunksz + k - 1
+
         # TODO: implement some way to retrieve info about which sequence a chunk comes from
         chunks = []
         for seq in seqs:

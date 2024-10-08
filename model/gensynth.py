@@ -265,6 +265,80 @@ def gen_adversarial_block_data_binary(max_len=4096, min_len=500, block_max=None,
         seqs = [[],[]]
         labels = []
 
+# helper function: simulate evolution on a single sequence after sampling from indel RVs
+def sim_evo(seq, prob_sub, indel_count, ins_count, indel_sizes):
+    # DELETIONS
+    # insertions are listed first in indel_sizes, so skip them
+    for i in range(ins_count, indel_count):
+        # get size
+        dsz = indel_sizes[i]
+        
+        # if we would delete more than the full sequence, proceed with empty sequence
+        if len(seq) - dsz <= 0:
+            seq = ''
+            break
+
+        # delete random chunk
+        pos_del = np.random.randint(0, len(seq)-dsz)
+        seq = seq[:pos_del] + seq[pos_del+dsz:] # type: ignore
+    
+    # SUBSTITUTIONS
+    if len(seq) > 0:
+        seq = list(seq)
+        # compute number of random substitutions to perform
+        count_sub = np.random.binomial(len(seq), prob_sub)
+
+        # simulate substitution events
+        if count_sub > 0:
+            seq_sub = gen_seq(count_sub)
+            idx_sub = random.sample(range(len(seq)), count_sub)
+
+            for j, i in enumerate(idx_sub):
+                seq[i] = seq_sub[j]
+    else:
+        # guarantee seq is a list
+        seq = []
+
+    # INSERTIONS
+    for i in range(ins_count):
+        # generate new sequence and insert at random position
+        isz = indel_sizes[i]
+        ins_seq = list(gen_seq(isz, lst=True))
+
+        if len(seq) == 0:
+            seq = ins_seq
+        else:
+            ins_pos = np.random.randint(0, len(seq))
+            # unfortunately this is the best way to insert multiple list elements in python
+            seq[ins_pos:ins_pos] = ins_seq
+
+    # convert back to string and return
+    return ''.join(seq)
+
+# helper function: enforce len(seq) == length via trimming or padding with random DNA
+def enforce_length(seq, length, min_pop=1.0):
+    if len(seq) > length:
+        # if too short, trim
+        trim_start = np.random.randint(0, len(seq) - length)
+        seq = seq[trim_start : trim_start+length]
+    else:
+        # else, generate rest of sequence as new random DNA
+        # if min_pop < 1.0, randomize sequence length in [min_pop, 1.0]
+        max_seq_len = max(length - len(seq), 0)
+        min_seq_len = max(int(length*min_pop) - len(seq), 0)
+        if min_seq_len >= max_seq_len:
+            seq_len = max_seq_len
+        else:
+            seq_len = np.random.randint(min_seq_len, max_seq_len)
+
+        # generate if necessary
+        if seq_len != 0:
+            # insert shared at random position
+            newseq = gen_seq(seq_len)
+            breakp = np.random.randint(0, len(newseq))
+            seq = newseq[:breakp] + seq + newseq[breakp:]
+
+    return seq
 
 # alt training regime: adversarial single chunks
 def gen_adversarial_chunks_binary(chunk_size=1024, min_pop=0.8, min_shared=512, boundary_pad=50,
@@ -314,85 +388,106 @@ def gen_adversarial_chunks_binary(chunk_size=1024, min_pop=0.8, min_shared=512, 
 
             # generate sequences: perturb then insert into new sequence
             for seqnum in range(2):
-                # SHARED REGION EVOLUTION
+                # evolve shared region
+                shared = sim_evo(shared, prob_sub, indel_count, ins_count, indel_sizes)
 
-                # DELETIONS
-                # insertions are listed first in indel_sizes, so skip them
-                for i in range(ins_count, indel_count):
-                    # get size
-                    dsz = indel_sizes[i]
-                    
-                    # if we would delete more than the full sequence, proceed with empty sequence
-                    if len(shared) - dsz <= 0:
-                        shared = ''
-                        break
-
-                    # delete random chunk
-                    pos_del = np.random.randint(0, len(shared)-dsz)
-                    shared = shared[:pos_del] + shared[pos_del+dsz:] # type: ignore
-                
-                # SUBSTITUTIONS
-                if len(shared) > 0:
-                    shared = list(shared)
-                    # compute number of random substitutions to perform
-                    count_sub = np.random.binomial(len(shared), prob_sub)
-
-                    # simulate substitution events
-                    if count_sub > 0:
-                        seq_sub = gen_seq(count_sub)
-                        idx_sub = random.sample(range(len(shared)), count_sub)
-
-                        for j, i in enumerate(idx_sub):
-                            shared[i] = seq_sub[j]
-                else:
-                    # guarantee seq is a list
-                    shared = []
-
-                # INSERTIONS
-                for i in range(ins_count):
-                    # generate new sequence and insert at random position
-                    isz = indel_sizes[i]
-                    ins_seq = list(gen_seq(isz, lst=True))
-
-                    if len(shared) == 0:
-                        shared = ins_seq
-                    else:
-                        ins_pos = np.random.randint(0, len(shared))
-                        # unfortunately this is the best way to insert multiple list elements in python
-                        shared[ins_pos:ins_pos] = ins_seq
-
-                # convert back to string
-                shared = ''.join(shared)
-
-                # REST OF SEQUENCE
-                
+                # trim or pad to meet chunk_size; use c + k - 1 because we want c kmers, not c bp
                 seqlen = chunk_size + k - 1
-                if len(shared) > seqlen:
-                    # if shared region is bigger than chunk size, trim
-                    seq = shared
-                    trim_start = np.random.randint(0, len(seq) - seqlen)
-                    seq = seq[trim_start : trim_start+seqlen]
-                else:
-                    # else, generate rest of sequence as new random DNA
-                    max_seq_len = max(seqlen - len(shared), 0)
-                    min_seq_len = max(int(chunk_size*min_pop) + k - 1 - len(shared), 0)
-                    if min_seq_len >= max_seq_len:
-                        seq_len = max_seq_len
-                    else:
-                        seq_len = np.random.randint(min_seq_len, max_seq_len)
+                seq = enforce_length(shared, seqlen)
 
-                    if seq_len == 0:
-                        # corner case if we don't end up adding anything
-                        seq = shared
-                    else:
-                        # insert shared at random position
-                        seq = gen_seq(seq_len)
-                        seq_break = np.random.randint(0, len(seq))
-                        seq = seq[:seq_break] + shared + seq[seq_break:]
-
-                # list -> string -> kmers
-                seq = ''.join(seq)
+                # convert to kmers
                 seqs[seqnum].append(seq2kmers(seq, k))
+
+        # yield complete list of sequences
+        a, b = pad_to_max(seqs[0], tokens, chunk_size), pad_to_max(seqs[1], tokens, chunk_size)
+        # force overfitting
+        for _ in range(1):
+            yield [a,b], expand_dims(constant(labels), axis=-1) # add dim to fix shape when training
+        seqs = [[],[]]
+        labels = []
+
+# variant for dependent training; takes list of chunks as input
+# TODO: merge with above
+def gen_adversarial_chunks_dependent(chunks,
+                                     chunk_size=1024, min_pop=0.8, min_shared=512, boundary_pad=50,
+                                     prob_sub=0.01, exp_indel_rate=0.005, exp_indel_size=10, 
+                                     batch_size=32, tokens=None, k=4, fixed=None):
+    # TODO: real docstring
+    # fixed: set to 1 or 0 for each sample to have a given label
+    seqs = [[],[]]
+    labels = []
+
+    # maintain list of current chunks
+    chunk_count = len(chunks)
+    chunk_idxs = list(range(chunk_count))
+
+    seqlen = chunk_size + k - 1
+    seqs_idxs = [0,1]
+
+    while True:
+        # pre-generate random number batches
+        # pick chunks to use, remove from chunk_idxs
+        # first, handle case where we have fewer chunks remaining than batch size
+        batch_idxs = []
+        to_sample = batch_size
+        if len(chunk_idxs) < batch_size:
+            print('all chunks traversed')
+            batch_idxs = chunk_idxs
+            chunk_idxs = list(range(chunk_count))
+            to_sample = batch_size - len(batch_idxs)
+        # otherwise, sample then remove via set operation
+        _batch_idxs = list(np.random.choice(chunk_idxs, to_sample, replace=False))
+        chunk_idxs = list(set(chunk_idxs).difference(set(_batch_idxs)))
+        batch_idxs += _batch_idxs
+
+        # if fixed, enforce shared region size; T and F are not real in this case, just makes implementation easier
+        if fixed is None:
+            shared_T = np.random.randint(min_shared, chunk_size-1, size=batch_size//2)
+            shared_F = np.random.randint(k, min_shared-boundary_pad, size=batch_size//2)
+        else:
+            shared_T = [min_shared] * (batch_size // 2)
+            shared_F = [min_shared] * (batch_size // 2)
+
+        for idx in range(batch_size):
+            # get current chunk, store randomly in seqs
+            chunk_idx = batch_idxs[idx]
+            chunk = chunks[chunk_idx]
+            np.random.shuffle(seqs_idxs)
+            seqs[seqs_idxs[0]].append(seq2kmers(chunk, k))
+
+            # alternate between true and false samples
+            label = idx % 2
+
+            # if fixed is set, use it as the final label
+            if fixed is None:
+                labels.append(label)
+            else:
+                labels.append(fixed)
+
+            # sample conserved region from chunk
+            if label == 1:
+                shared_length = shared_T[idx // 2]
+            else:
+                shared_length = shared_F[idx // 2]
+            shared_start = np.random.randint(0, seqlen-shared_length)
+            shared = chunk[shared_start : shared_start + shared_length]
+
+            # sample indel RVs
+            exp_indel_count = exp_indel_rate * shared_length
+            indel_count = np.random.poisson(exp_indel_count)
+            ins_frac = np.random.uniform()
+            indel_sizes = np.random.poisson(exp_indel_size, size=indel_count)
+
+            ins_count = np.int32(np.round(indel_count * ins_frac))
+
+            # evolve shared region
+            shared = sim_evo(shared, prob_sub, indel_count, ins_count, indel_sizes)
+
+            # trim or pad to meet chunk_size; use c + k - 1 because we want c kmers, not c bp
+            seq = enforce_length(shared, seqlen)
+
+            # convert to kmers
+            seqs[seqs_idxs[1]].append(seq2kmers(seq, k))
 
         # yield complete list of sequences
         a, b = pad_to_max(seqs[0], tokens, chunk_size), pad_to_max(seqs[1], tokens, chunk_size)
