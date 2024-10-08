@@ -164,7 +164,30 @@ class HashIndex:
                     continue
                 seqs.append(instr)
         return sorted(seqs, key=len)
+    
+    def chunks_from_file(self, fileidx, chunksz, overlap=0.5, k=4):
+        # convert sequences into fixed size, overlapping, fully populated chunks
+        assert overlap < 1.0
+        seqs = self.seqs_from_file(fileidx, k)
 
+        # TODO: implement some way to retrieve info about which sequence a chunk comes from
+        chunks = []
+        for seq in seqs:
+            seqlen = len(seq)
+            if seqlen < chunksz:
+                continue
+            # overlapping steps
+            step = int(chunksz*(1-overlap))
+            for i in range(0, seqlen, step):
+                j = i + chunksz
+                # add all full chunks
+                if j < seqlen:
+                    chunks.append(seq[i:j])
+                # add an extra final chunk if there's enough new material
+                # current rule: accept if there's at least 1/2 a step worth of material remaining
+                elif j - seqlen <= step / 2:
+                    chunks.append(seq[seqlen-chunksz:])
+        return chunks
 
 if __name__ == '__main__':
     # test code

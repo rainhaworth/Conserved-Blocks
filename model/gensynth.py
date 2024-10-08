@@ -269,7 +269,9 @@ def gen_adversarial_block_data_binary(max_len=4096, min_len=500, block_max=None,
 # alt training regime: adversarial single chunks
 def gen_adversarial_chunks_binary(chunk_size=1024, min_pop=0.8, min_shared=512, boundary_pad=50,
                                   prob_sub=0.01, exp_indel_rate=0.005, exp_indel_size=10, 
-                                  batch_size=32, tokens=None, k=4):
+                                  batch_size=32, tokens=None, k=4, fixed=None):
+    # TODO: real docstring
+    # fixed: set to 1 or 0 for each sample to have a given label
     seqs = [[],[]]
     labels = []
 
@@ -277,13 +279,23 @@ def gen_adversarial_chunks_binary(chunk_size=1024, min_pop=0.8, min_shared=512, 
 
     while True:
         # pre-generate random number batches
-        shared_T = np.random.randint(min_shared, chunk_size-1, size=batch_size//2)
-        shared_F = np.random.randint(k, min_shared-boundary_pad, size=batch_size//2)
+        # if fixed, enforce shared region size; T and F are not real in this case, just makes implementation easier
+        if fixed is None:
+            shared_T = np.random.randint(min_shared, chunk_size-1, size=batch_size//2)
+            shared_F = np.random.randint(k, min_shared-boundary_pad, size=batch_size//2)
+        else:
+            shared_T = [min_shared] * (batch_size // 2)
+            shared_F = [min_shared] * (batch_size // 2)
 
         for idx in range(batch_size):
             # alternate between true and false samples
             label = idx % 2
-            labels.append(label)
+
+            # if fixed is set, use it as the final label
+            if fixed is None:
+                labels.append(label)
+            else:
+                labels.append(fixed)
 
             # generate conserved region
             if label == 1:

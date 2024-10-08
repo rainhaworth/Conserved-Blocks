@@ -326,7 +326,7 @@ def bucket_metric_factory(n=32, h=64, alpha=0.2, w_neg=1.0, w_bal=0.5, losstype=
         # get true positives
         tp = exact_match * y_true
 
-        # divide positive sample similarities by # positive samples
+        # compute TP/P
         return tf.reduce_sum(tp) / tf.reduce_sum(y_true)
     
     # fraction of unique hashes; doesn't really need y_true but keras will get mad
@@ -350,3 +350,32 @@ def bucket_metric_factory(n=32, h=64, alpha=0.2, w_neg=1.0, w_bal=0.5, losstype=
     hash_recall.__name__ = 'recall'
 
     return hash_loss, hash_precision, hash_recall, unique
+
+# standalone TNR function
+def bucket_TNR_factory(h=64):
+    def bucket_TNR(y_true, y_pred):
+        # get hash tensors; convert to binary
+        ht1 = tf.sign(y_pred[0])
+        ht2 = tf.sign(y_pred[1])
+        #ht1 = tf.where(y_pred[0] > 0.5, 1.0, -1.0)
+        #ht2 = tf.where(y_pred[1] > 0.5, 1.0, -1.0)
+        y_true = tf.squeeze(y_true)
+
+        # get similarity values from -1 to 1
+        sim = tf.reduce_sum(ht1 * ht2, axis=-1) / h
+        max_sim = tf.reduce_max(sim, axis=-1)
+
+        # get predicted negatives
+        exact_match = tf.where(max_sim == 1.0,
+                               0 * max_sim,
+                               max_sim)
+        
+        # get true negatives
+        tn = exact_match * (1.0 - y_true)
+
+        # compute TN/N
+        return tf.reduce_sum(tn) / tf.reduce_sum(1.0 - y_true)
+    
+    bucket_TNR.__name__ = 'TNR'
+
+    return bucket_TNR
