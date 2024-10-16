@@ -3,7 +3,7 @@
 
 import tensorflow as tf
 import numpy as np
-import model.hash_metrics
+from model.hash_metrics import *
 
 # COMPONENTS
 
@@ -88,24 +88,26 @@ class ResBlock1D(tf.keras.layers.Layer):
 # inception layer w/ dim reduction
 # hybrid of original 2014 architecture and LSB architecture
 class InceptionLayer(tf.keras.layers.Layer):
-    def __init__(self, dim=128, minlen=1, maxlen=9, pool=2, layernorm=False, reduce=True):
+    def __init__(self, dim=128, maxlen=7, pool=2, layernorm=False, reduce=True):
         super(InceptionLayer, self).__init__()
 
         self.dim = dim
         if reduce:
             # require divisibility by # of filters
-            assert (dim*pool) % (maxlen-minlen) == 0
-            self.dim = (dim*pool) // (maxlen-minlen)
+            assert (dim*pool) % (maxlen+1) == 0
+            self.dim = (dim*pool) // (maxlen+1)
 
-        self.filters = [tf.keras.layers.Conv1D(self.dim, f, activation='relu', padding='same')
-                        for f in range(minlen, maxlen)]
+        self.filters = [tf.keras.layers.Conv1D(self.dim, f+1, activation='relu', padding='same')
+                        for f in range(maxlen)]
+        self.filters.append(tf.keras.layers.MaxPool1D(2, 1, 'same'))
         self.pool = tf.keras.layers.MaxPool1D(pool)
         #self.norm = tf.keras.layers.LayerNormalization()
 
         self.reducers = [None for _ in range(len(self.filters))]
         if reduce:
             # first layer does not need a reducer
-            self.reducers[1:] = [tf.keras.layers.Conv1D(self.dim, 1, activation='relu') for _ in range(len(self.filters)-1)]
+            self.reducers[1:] = [tf.keras.layers.Conv1D(self.dim, 1, activation='relu', padding='same')
+                                 for _ in range(len(self.filters)-1)]
     
     def call(self, x):
         # apply filters
@@ -118,7 +120,7 @@ class InceptionLayer(tf.keras.layers.Layer):
             #o = self.pool(o)
             out.append(o)
         # concat feature maps
-        return self.pool(tf.concat(out, axis=-1))
+        return tf.concat(out, axis=-1) # removed pool
 
 # MLP for hashing
 class MLPHasher(tf.keras.layers.Layer):
@@ -377,43 +379,23 @@ class ChunkMultiHash:
         self.n = n_hash
         d = d_model
 
-        #assert (d * 16) % n_hash == 0
-
         # kmer embedding
         self.kmer_emb = tf.keras.layers.Embedding(tokens.num(), d) # b x l x d
 
-        # feature extraction
-        # init conv
-        self.conv_1 = tf.keras.layers.Conv1D(d, 32, activation='relu', padding='same')
-        # dim reduction
+        # encoder convnet
         self.conv_pool = tf.keras.layers.MaxPool1D(2)
-        # sequential convnet
-        self.conv_layers = [self.conv_1, self.conv_pool, 
-                            ResBlock1D(dim=d, kernelsz=16, layernorm=True), self.conv_pool,
-                            ResBlock1D(dim=d, kernelsz=8, layernorm=True), self.conv_pool,
-                            #ResBlock1D(dim=d, kernelsz=4, layernorm=True), #self.conv_pool, 
-                            #ResBlock1D(dim=d, kernelsz=4, layernorm=True), self.conv_pool, 
-                            ResBlock1D(dim=d, kernelsz=4, layernorm=True)]
-
-        # edge extractors; outputs concatenated
-        #self.edge_layers = [tf.keras.layers.Conv1D(d, f, activation='relu') for f in range(2, 10)]
-        self.inception = InceptionLayer(d)
-
-        # reduce to ~original size
-        self.edge_pool = tf.keras.layers.MaxPool1D(2)
-        #self.edge_norm = tf.keras.layers.LayerNormalization()
-
-        # fix dims for TimeDistributed
-        self.permuter = tf.keras.layers.Permute((2,1,3))
+        self.conv_layers = [tf.keras.layers.Conv1D(d, 32, activation='relu', padding='same'), self.conv_pool,
+                            InceptionLayer(d), self.conv_pool,
+                            InceptionLayer(d*2), self.conv_pool, 
+                            InceptionLayer(d*4), self.conv_pool,
+                            ResBlock1D(dim=d*8, kernelsz=4, layernorm=True),
+                            ]
 
         # hasher
         self.flatten = tf.keras.layers.Flatten()
-        #self.hash_layer = SplitHasher(hashsz, n_hash, d)
-        self.hash_layer = tf.keras.layers.Dense(hashsz*n_hash, activation='tanh') # for non-distributed do hashsz*n_hash
-        #self.hash_layer = MLPHasher(hashsz*n_hash)
-        self.distributed_hash = tf.keras.layers.TimeDistributed(self.hash_layer)
+        self.hash_layer = tf.keras.layers.Dense(hashsz*n_hash, activation='tanh')
 
-    def compile(self, optimizer='adam'):
+    def compile(self, optimizer='adam', mode='train'):
         inseqs1 = tf.keras.layers.Input(shape=(self.c,), dtype='int32')
         inseqs2 = tf.keras.layers.Input(shape=(self.c,), dtype='int32')
 
@@ -422,71 +404,52 @@ class ChunkMultiHash:
         hashes = []
         
         for ins in inseqs:
-            # make embedding mask
-            #mask = tf.not_equal(ins, 0)[...,None]
-            #mask = tf.cast(mask, float)
-
             # get embeddings (b x c x d)
             x = self.kmer_emb(ins)
-            # apply mask
-            #x = x * mask
 
-            # convnet; output (b x s x d), where s is some # of downsampled steps
+            # encode with convnet; output (b x s x d), where s is some # of downsampled steps
             for layer in self.conv_layers:
                 x = layer(x)
 
-            # apply inception layer
-            #x = self.inception(x)
+            # normalize -> hash
             x = tf.math.l2_normalize(x, axis=-1)
-            #hashes_raw = self.hash_layer(x)
             x = self.flatten(x)
-            # mask out nans
-            #mask = tf.math.is_finite(x)
-            #x = tf.where(mask, x, 0.0)
             x = self.hash_layer(x)
             hashes_raw = tf.reshape(x, [-1, self.n, self.h])
             
-            """
-            # reshape to (b x s x n x (d*16//n))
-            s = tf.shape(x)[1]
-            x = tf.reshape(x, [-1, s, self.n,
-                               self.d_model//self.n])
-            # rearrange dims
-            x = self.permuter(x)
-            # reshape to (b x n x (s*d*16//n)); essentially flatten last 2 layers
-            x = tf.reshape(x, [-1, self.n, s*self.d_model//self.n])
-
-            # get hashes (b x n x h)
-            hashes_raw = self.distributed_hash(x)
-
-            ###############
-
-            # edges
-            edges = []
-            for el in self.edge_layers:
-                e = el(x)
-                e = self.edge_pool(e)
-                edges.append(e)
-            # concat
-            x = tf.concat(edges, axis=-2)
-
-            # normalize; avoids nan loss
-            x = tf.math.l2_normalize(x, axis=-1)
-
-            # big hash
-            x = self.flatten(x)
-            x = self.hash_layer(x)
-            hashes_raw = tf.reshape(x, [-1, self.n, self.h])"""
             hashes.append(hashes_raw)
 
         hash_loss, hash_precision, hash_recall, unique = bucket_metric_factory(self.n, self.h, w_bal=0.0)
+
+        metrics = []
+        if mode == 'train':
+            metrics = [hash_precision, hash_recall, unique]
+        elif mode == 'eval':
+            TNR = bucket_TNR_factory(self.h)
+            metrics = [hash_recall, TNR, unique]
+
 
         # create model
         self.model = tf.keras.Model(inseqs, tf.stack(hashes, 0))
         self.model.compile(optimizer,
                            hash_loss, 
-                           [hash_precision, hash_recall, unique]
+                           metrics
                            )
+    
+    # create single sequence hashing model, store as self.hasher
+    def make_inference_model(self):
+        inseqs = tf.keras.layers.Input(shape=(self.c,), dtype='int32')
+
+        x = self.kmer_emb(inseqs)
+        for layer in self.conv_layers:
+            x = layer(x)
+
+        x = tf.math.l2_normalize(x, axis=-1)
+        x = self.flatten(x)
+        x = self.hash_layer(x)
+        hashes = tf.reshape(x, [-1, self.n, self.h])
+
+        self.hasher = tf.keras.Model(inseqs, hashes)
 
 
 if __name__ == '__main__':

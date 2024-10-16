@@ -141,41 +141,64 @@ class DataIndex:
                 length += len(file)
             return length
         
-# simple hash index wrapper for standardization
-class HashIndex:
-    def __init__(self, path, ext='fa'):
-        self.filenames = glob.glob(os.path.join(path, '*.' + ext))
+# sparse hash table w/ collision count tracking using native python data structures
+class HashTable:
+    def __init__(self):
         self.index = defaultdict(list)
         self.counter = Counter()
 
-    def add(self, hash, fileidx, seqidx=-1, chunkidx=-1):
-        self.index[hash].append((fileidx, seqidx, chunkidx))
+    def add(self, hash, data):
+        self.index[hash].append(data)
         self.counter[hash] += 1
+
+
+# manages both data input and hash tables
+class HashIndex:
+    def __init__(self, path, n=1, ext='fa'):
+        self.filenames = glob.glob(os.path.join(path, '*.' + ext))
+        self.hash_tables = [HashTable() for _ in range(n)]
+
+    # add the same data to each hash table at the specified n hash values
+    def add(self, hashes, data):
+        assert len(hashes) == len(self.hash_tables)
+        for i in range(len(hashes)):
+            self.hash_tables[i].add(hashes[i], data)
     
-    def seqs_from_file(self, fileidx, k=4):
+    def seqs_from_file(self, fileidx, k=4, metadata=False):
         seqs = []
+        mds = []
         with open(self.filenames[fileidx], 'r') as f:
+            seq = ''
             while True:
-                instr = f.readline()
+                instr = f.readline().strip()
                 if not instr:
+                    if seq != '':
+                        seqs.append(seq)
                     break
-                # skip metadata lines
-                if instr[0] == '>' or len(instr) < k:
+                elif len(instr) == 0:
                     continue
-                seqs.append(instr)
-        return sorted(seqs, key=len)
+                elif instr[0] == '>':
+                    if seq != '':
+                        seqs.append(seq)
+                        seq = ''
+                    if metadata:
+                        mds.append(instr[1:])
+                    continue
+                seq += instr
+        seqs = sorted(seqs, key=len)
+        return seqs, mds
     
-    def chunks_from_file(self, fileidx, chunksz, overlap=0.5, k=4):
+    def chunks_from_file(self, fileidx, chunksz, overlap=0.5, k=4, metadata=False):
         # convert sequences into fixed size, overlapping, fully populated chunks
         assert overlap < 1.0
-        seqs = self.seqs_from_file(fileidx, k)
+        seqs, seqmds = self.seqs_from_file(fileidx, k, metadata)
 
         # adjust for kmer size; we want to end up with chunksz kmers later
         chunksz = chunksz + k - 1
 
-        # TODO: implement some way to retrieve info about which sequence a chunk comes from
         chunks = []
-        for seq in seqs:
+        chunkmds = []
+        for idx, seq in enumerate(seqs):
             seqlen = len(seq)
             if seqlen < chunksz:
                 continue
@@ -183,14 +206,22 @@ class HashIndex:
             step = int(chunksz*(1-overlap))
             for i in range(0, seqlen, step):
                 j = i + chunksz
+                newchunk = False
                 # add all full chunks
                 if j < seqlen:
                     chunks.append(seq[i:j])
+                    newchunk = True
                 # add an extra final chunk if there's enough new material
                 # current rule: accept if there's at least 1/2 a step worth of material remaining
                 elif j - seqlen <= step / 2:
                     chunks.append(seq[seqlen-chunksz:])
-        return chunks
+                    newchunk = True
+                # add metadata
+                if metadata and newchunk:
+                    chunkmds.append(seqmds[idx])
+        if not metadata:
+            return chunks
+        return chunks, chunkmds
 
 if __name__ == '__main__':
     # test code

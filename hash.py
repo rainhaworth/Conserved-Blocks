@@ -2,103 +2,93 @@
 import os
 import pickle
 import model.input as dd
-from tqdm.auto import tqdm
+from tqdm import tqdm
 import time
 import argparse
 import tensorflow as tf
 
-from model.input import pad_to_min_chunk, HashIndex
+from model.input import pad_to_max, HashIndex
 
 # command line args
 parser = argparse.ArgumentParser()
-parser.add_argument('--chunk_size', default=2000, type=int)
-parser.add_argument('--k', default=4, type=int)
-parser.add_argument('--d_model', default=64, type=int)
-parser.add_argument('--hash_size', default=64, type=int)
-parser.add_argument('--chunk_pop', default=0.8, type=float) # fraction of chunk that must be populated
+parser.add_argument('-l', '--lenseq', default=2000, type=int)
+parser.add_argument('-k', default=4, type=int)
+parser.add_argument('-d', '--d_model', default=64, type=int)
+parser.add_argument('-z', '--hashsz', default=64, type=int)
+parser.add_argument('-n', '--n_hash', default=8, type=int)
+parser.add_argument('-b', '--batchsz', default=1024, type=int)
+parser.add_argument('-m', '--mfile', default='/fs/nexus-scratch/rhaworth/models/chunkhashdep.model.h5', type=str)
+parser.add_argument('-r', '--resultdir', default='/fs/nexus-scratch/rhaworth/output/', type=str)
+parser.add_argument('-i', '--indir', default='/fs/cbcb-lab/mpop/projects/premature_microbiome/assembly/', type=str)
+parser.add_argument('-o', '--outfile', default='hashindex.pickle', type=str)
+parser.add_argument('--ext', default='fa', type=str)
 args = parser.parse_args()
 
 # set global vars
-chunk_size = args.chunk_size
+chunk_size = args.lenseq
 k = args.k
 d_model = args.d_model
-hash_size = args.hash_size
-chunk_pop = args.chunk_pop
+hash_size = args.hashsz
+n_hash = args.n_hash
 
 # load kmer dict
 itokens, otokens = dd.LoadKmerDict('./utils/' + str(k) + 'mers.txt', k=k)
 
 # initialize model
-from model.chunk_hash import DiscretizedChunkHash
-ch = DiscretizedChunkHash(itokens, d_model=d_model, hashsz=hash_size, chunksz=chunk_size)
+from model.chunk_hash import ChunkMultiHash
+ch = ChunkMultiHash(itokens, chunk_size, d_model, hash_size, n_hash)
 
 # load weights
-# TODO: make this a parameter
-mfile = '/fs/nexus-scratch/rhaworth/models/chunkhash.model.h5'
+mfile = args.mfile
 ch.compile()
 try: ch.model.load_weights(mfile)
 except: print('\nno model found')
 ch.make_inference_model()
 
-# utility functions
-def maxlen_to_batch(maxlen, vram=24, res_layers=6):
-    # vram in GB; TODO: fetch via nvidia-smi or tf.config.experimental.get_memory_info
-    # assume padded to min chunk
-    vram = vram * 1e9
-    copy_mult = 6 + res_layers
-    # also divide by float size (4 bytes)
-    capacity = vram // (4 * d_model * copy_mult)
-    # compute batch size
-    return capacity // maxlen
-
 ### HASHING ###
 
 # TODO: these should be parameters too
-dataset_path = '/fs/cbcb-lab/mpop/projects/premature_microbiome/assembly/'
-results_dir = '/fs/nexus-scratch/rhaworth/output/'
-ext = 'fa'
+dataset_path = args.indir
+results_dir = args.resultdir
+ext = args.ext
 
-hash_index = HashIndex(dataset_path, ext)
+hash_index = HashIndex(dataset_path, n_hash, ext)
 print('files found:', len(hash_index.filenames))
 
 # set start time
 start_time = time.time()
 
+# set batch size to largest multiple of 2 that fits on GPU
+bsz = args.batchsz
+
+# print statement profiling because i still don't know how python profilers work
+batch_time = 0.0
+predict_time = 0.0
+convert_time = 0.0
+table_time = 0.0
+
 for fileidx, filename in enumerate(hash_index.filenames):
     print('file', fileidx, ':', filename)
 
-    # read file, get sequences, sort by length
-    seqs = hash_index.seqs_from_file(fileidx)
-    
-    """
-    # prune short sequences
-    seq_lens = [len(s) for s in seqs]
-    i = 0
-    # we could binary search but do this later
-    while seq_lens[i] < chunk_pop * chunk_size:
-        i += 1
-    seqs = seqs[i:]"""
+    # read file, get sequences, split into chunks
+    chunks = hash_index.chunks_from_file(fileidx, chunk_size, 0.5, k)
 
-    # enter loop until sequence list exahusted
-    idx = len(seqs)-1
-    pbar = tqdm(total=idx)
-    while idx > 0:
-        # get batch size, update idx
-        maxlen = len(seqs[idx])
-        bsz = maxlen_to_batch(maxlen)
-        #print(maxlen, bsz)
-
-        bsz = int(min(bsz, idx))
-
-        # construct batch
-        batch = seqs[idx-bsz:idx+1]
-
-        batch_tokens = pad_to_min_chunk(batch, itokens, maxlen, chunk_size)
+    # iterate over chunks
+    for idx in tqdm(range(0, len(chunks), bsz)):
+        # get current batch of chunk strings, convert to kmers, convert to tensor
+        _b = time.time()
+        batch = chunks[idx:idx+bsz]
+        batch_kmers = [[seq[i:i+k] for i in range(chunk_size - k + 1)] for seq in batch]
+        batch_tokens = pad_to_max(batch_kmers, itokens, chunk_size)
         
         # call model to get hash
+        # shape: (bsz, n, h)
+        _p = time.time()
         hashes_binary = ch.hasher.predict(batch_tokens, verbose=0) # type: ignore
 
-        # binary (-1,1) to binary (0,1) to int
+        # binary {-1,1} to binary {0,1} to int
+        # shape: (bsz, n)
+        _c = time.time()
         hashes_binary = 0.5 * (1.0 + hashes_binary)
         hashes_int = tf.reduce_sum(tf.cast(hashes_binary, dtype=tf.int64) 
                                    * tf.cast(2, dtype=tf.int64) ** tf.range(tf.cast(hash_size, tf.int64)),
@@ -106,35 +96,28 @@ for fileidx, filename in enumerate(hash_index.filenames):
         # tensor to array
         hashes = hashes_int.numpy()
 
-        # update index + counter
-        for seqidx, seqhashes in enumerate(hashes):
-            for chunkidx, hash in enumerate(seqhashes):
-                # drop invalid hashes
-                if hash == 0:
-                    continue
-                # TODO: convert to short
-                # convert seqidx from index in batch to index in seqs array
-                hash_index.add(hash, fileidx, seqidx + idx - bsz, chunkidx)
-
-        # update loop index + tqdm
-        idx -= bsz
-        pbar.update(bsz)
-
-        # everything gets converted to float for some reason so fix that
-        idx = int(idx)
-        bsz = int(bsz)
-
-    pbar.close()
+        # update hash tables
+        _t = time.time()
+        for batchidx, seq_hashes in enumerate(hashes):
+            hash_index.add(seq_hashes, (fileidx, idx + batchidx))
+        table_time += time.time() - _t
+        convert_time += _t - _c
+        predict_time += _c - _p
+        batch_time += _p - _b
 
     # continue to next iteration
-    print('unique hashes:', len(hash_index.counter.keys()))
-    print('top 5 collisions:', hash_index.counter.most_common(5))
+    print('unique hashes:', sum([len(x.counter.keys()) for x in hash_index.hash_tables]))
+    print('top 5 collisions:', hash_index.hash_tables[0].counter.most_common(5)) # this one is like fake now
     print('time elapsed:', time.time() - start_time)
 
-print(hash_index.counter)
+#print(hash_index.counter)
+print('profiling')
+print(batch_time)
+print(predict_time)
+print(convert_time + table_time) # should be ~1% total so just merge
 
 # write final index and counter to files
-outfile1 = os.path.join(results_dir, 'hashindex.pickle')
+outfile1 = os.path.join(results_dir, args.outfile)
 with open(outfile1, 'wb') as f:
     pickle.dump(hash_index, f)
 
