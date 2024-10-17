@@ -21,7 +21,7 @@ parser.add_argument('-e', '--encoder', default='chunk', type=str, choices=['chun
 parser.add_argument('-i', '--interactive', action='store_true')
 parser.add_argument('--band_eval', action='store_true')
 parser.add_argument('--eval_only', action='store_true')
-parser.add_argument('-t', '--target', type=str) # target file or directory
+parser.add_argument('-t', '--target', default='/fs/cbcb-lab/mpop/projects/premature_microbiome/assembly/SRR5405830_rtrim0_final_contigs.fa', type=str) # target file or directory
 args = parser.parse_args()
 
 chunksz = args.lenseq
@@ -34,10 +34,17 @@ n_hash = args.n_hash # for bucketing approach
 enc = args.encoder
 
 # construct hashindex, extract chunks from file
-dir = os.path.dirname(args.target)
-index = dd.HashIndex(dir, 'fa')
-fileidx = index.filenames.index(args.target)
-chunks = index.chunks_from_file(fileidx, chunksz, 0.5, k)
+# if provided dir, use all files in dir; if provided file, construct index from dir then extract file
+overlap = 0.5
+if os.path.isdir(args.target):
+    index = dd.HashIndex(args.target, n_hash, 'fa')
+    chunks = []
+    for i in range(len(index.filenames)):
+        chunks += index.chunks_from_file(i, chunksz, overlap, k)
+else:
+    index = dd.HashIndex(os.path.dirname(args.target), n_hash, 'fa')
+    fileidx = index.filenames.index(args.target)
+    chunks = index.chunks_from_file(fileidx, chunksz, overlap, k)
 
 itokens, _ = dd.LoadKmerDict('./utils/' + str(k) + 'mers.txt', k=k)
 gen_train = gs.gen_adversarial_chunks_dependent(chunks,
@@ -63,7 +70,7 @@ def lr_schedule(epoch, lr):
     else:
         return lr * np.exp(-0.5)
 
-mfile = '/fs/nexus-scratch/rhaworth/models/chunkhash.model.h5'
+mfile = '/fs/nexus-scratch/rhaworth/models/chunkhashdep.model.h5'
 
 lr_scheduler = tf.keras.callbacks.LearningRateScheduler(lr_schedule, verbose=0)
 model_saver = tf.keras.callbacks.ModelCheckpoint(mfile, monitor='loss', save_best_only=True, save_weights_only=True)
@@ -73,7 +80,7 @@ import datetime
 log_dir = "./logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
 
-ssb.compile()
+ssb.compile(tf.keras.optimizers.Adam(0.001))
 try: ssb.model.load_weights(mfile)
 except: print('\n\nnew model')
 
@@ -85,7 +92,7 @@ if args.interactive:
 
 # train unless eval_only flag set
 if not args.eval_only:
-    ssb.model.fit(gen_train, steps_per_epoch=200, epochs=15, verbose=verbose, \
+    ssb.model.fit(gen_train, steps_per_epoch=100, epochs=15, verbose=verbose, \
                 #validation_data=([Xvalid, Yvalid], None), \
                 callbacks=[lr_scheduler,
                             model_saver,
@@ -95,15 +102,17 @@ if not args.eval_only:
 
 # check accuracy near decision boundary
 print('hard gen eval')
-gen_hard = gs.gen_adversarial_chunks_binary(chunk_size=chunksz, min_shared=min_len, batch_size=batch_size,
-                                            tokens=itokens, k=k, boundary_pad=20, min_pop=1.0)
+gen_hard = gs.gen_adversarial_chunks_dependent(chunks,
+                                               chunk_size=chunksz, min_shared=min_len, batch_size=batch_size,
+                                               tokens=itokens, k=k, boundary_pad=20, min_pop=1.0)
 ssb.model.evaluate(gen_hard, steps=100, verbose=verbose)
 
 # check accuracy far from decision boundary
 print('simple gen eval')
-gen_simple = gs.gen_adversarial_chunks_binary(chunk_size=chunksz, min_shared=min_len, batch_size=batch_size,
-                                                prob_sub=0.0, exp_indel_rate=0.0, exp_indel_size=0,
-                                                tokens=itokens, k=k, boundary_pad=20, min_pop=1.0)
+gen_simple = gs.gen_adversarial_chunks_dependent(chunks,
+                                                 chunk_size=chunksz, min_shared=min_len, batch_size=batch_size,
+                                                 prob_sub=0.0, exp_indel_rate=0.0, exp_indel_size=0,
+                                                 tokens=itokens, k=k, boundary_pad=20, min_pop=1.0)
 ssb.model.evaluate(gen_simple, steps=100, verbose=verbose)
 
 # evaluate w/ fixed shared region sizes in steps of 100 if band_eval flag is set
@@ -119,15 +128,17 @@ if args.band_eval:
         label = int(shared_len >= min_len)
 
         print('hard gen eval')
-        gen_hard = gs.gen_adversarial_chunks_binary(chunk_size=chunksz, min_shared=shared_len, batch_size=batch_size,
-                                                    tokens=itokens, k=k, boundary_pad=20, min_pop=1.0,
-                                                    fixed=label)
+        gen_hard = gs.gen_adversarial_chunks_dependent(chunks,
+                                                       chunk_size=chunksz, min_shared=shared_len, batch_size=batch_size,
+                                                       tokens=itokens, k=k, boundary_pad=20, min_pop=1.0,
+                                                       fixed=label)
         ssb.model.evaluate(gen_hard, steps=100, verbose=verbose)
 
         # check accuracy far from decision boundary
         print('simple gen eval')
-        gen_simple = gs.gen_adversarial_chunks_binary(chunk_size=chunksz, min_shared=shared_len, batch_size=batch_size,
-                                                    prob_sub=0.0, exp_indel_rate=0.0, exp_indel_size=0,
-                                                    tokens=itokens, k=k, boundary_pad=20, min_pop=1.0,
-                                                    fixed=label)
+        gen_simple = gs.gen_adversarial_chunks_dependent(chunks,
+                                                         chunk_size=chunksz, min_shared=shared_len, batch_size=batch_size,
+                                                         prob_sub=0.0, exp_indel_rate=0.0, exp_indel_size=0,
+                                                         tokens=itokens, k=k, boundary_pad=20, min_pop=1.0,
+                                                         fixed=label)
         ssb.model.evaluate(gen_simple, steps=100, verbose=verbose)

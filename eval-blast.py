@@ -4,137 +4,169 @@ import csv # for writing data
 import model.input as dd
 import numpy as np
 import time
+import pickle
 from math import comb # for computing max number of hits
+from collections import defaultdict
 import argparse
+from tqdm import tqdm
+import itertools
 
 parser = argparse.ArgumentParser()
 # model
-parser.add_argument('--max_len', default=4096, type=int)
-parser.add_argument('--batch_size', default=32, type=int)
-parser.add_argument('--k', default=4, type=int)
-parser.add_argument('--d_model', default=128, type=int)
-# eval
-parser.add_argument('-c', '--cluster_batch_size', default=512, type=int)
-# output
+parser.add_argument('-l', '--lenseq', default=2000, type=int)
+parser.add_argument('-k', default=4, type=int)
+#parser.add_argument('-d', '--d_model', default=64, type=int)
+parser.add_argument('-z', '--hashsz', default=64, type=int)
+parser.add_argument('-n', '--n_hash', default=8, type=int)
+#parser.add_argument('-b', '--batchsz', default=1024, type=int)
+parser.add_argument('-m', '--mfile', default='/fs/nexus-scratch/rhaworth/models/chunkhashdep.model.h5', type=str)
+parser.add_argument('-r', '--resultdir', default='/fs/nexus-scratch/rhaworth/output/', type=str)
+#parser.add_argument('-i', '--indir', default='/fs/cbcb-lab/mpop/projects/premature_microbiome/assembly/', type=str)
+parser.add_argument('--mode', choices={'allvsall', 'srctgt'}, default='allvsall', type=str)
+parser.add_argument('--srcindex', default='hashindex.pickle', type=str)
+parser.add_argument('--tgtindex', default='', type=str)
+parser.add_argument('--blast', default='prem-micro-blast-reduced.txt', type=str) # blast-reduce.py output file
+parser.add_argument('--ext', default='fa', type=str)
 parser.add_argument('-o', '--output', type=str, choices={'summary', 'allhits', 'gephicsv'}, default='summary')
 
 args = parser.parse_args()
 
-# set global max length, batch size, and k
-max_len = args.max_len
-batch_size = args.batch_size
-k = args.k
-d_model = args.d_model
-
 itokens, otokens = dd.LoadKmerDict('./utils/' + str(k) + 'mers.txt', k=k)
-#gen = dd.gen_simple_block_data_binary(max_len=max_len, min_len=max_len//4, batch_size=batch_size, tokens=itokens, k=k)
-#gen = dd.KmerDataGenerator('/fs/nexus-scratch/rhaworth/hmp-mini/', itokens, otokens, batch_size=4, max_len=max_len)
 
-dataset_path = '/fs/cbcb-lab/mpop/projects/premature_microbiome/assembly/'
-results_dir = '/fs/nexus-scratch/rhaworth/output/'
-blast_red_file = 'prem-micro-blast-reduced.txt'
+max_len = args.lenseq
+k = args.k
+n_hash = args.n_hash
+results_dir = args.resultdir
+dataset_path = results_dir
+blast_red_file = args.blast
+ext = args.ext
 
-dataset = dd.DataIndex(dataset_path, itokens, otokens, k=k, max_len=max_len, fasta=True, metadata=True)
+# load hash indices
+hash_index_fn = os.path.join(dataset_path, args.srcindex)
+with open(hash_index_fn, 'rb') as f:
+    hash_index_src : dd.HashIndex = pickle.load(f)
+print(len(hash_index_src.filenames), 'source files found')
 
-cluster_file = os.path.join(results_dir, 'batchsz-' + str(args.cluster_batch_size) + '-clusters.csv')
+# in all-vs-all, source and target are the same
+if args.mode == 'allvsall':
+    hash_index_tgt = hash_index_src
+else:
+    hash_index_fn = os.path.join(dataset_path, args.tgtindex)
+    with open(hash_index_fn, 'rb') as f:
+        hash_index_tgt : dd.HashIndex = pickle.load(f)
+    print(len(hash_index_tgt.filenames), 'target files found')
+
+# get chunk metadata
+metadata_src = []
+for i in range(len(hash_index_src.filenames)):
+    # TODO: overlap param
+    _, mds = hash_index_src.chunks_from_file(i, max_len, 0.5, k, True)
+    metadata_src.append(mds)
+metadata_tgt = []
+for i in range(len(hash_index_tgt.filenames)):
+    # TODO: overlap param
+    _, mds = hash_index_tgt.chunks_from_file(i, max_len, 0.5, k, True)
+    metadata_tgt.append(mds)
+
+# pad and convert to numpy array
+max_md_src = max(len(md) for md in metadata_src)
+max_md_tgt = max(len(md) for md in metadata_tgt)
+for i in range(len(metadata_src)):
+    if len(metadata_src[i]) < max_md_src:
+        metadata_src[i] += [''] * (max_md_src - len(metadata_src[i]))
+for i in range(len(metadata_tgt)):
+    if len(metadata_tgt[i]) < max_md_tgt:
+        metadata_tgt[i] += [''] * (max_md_tgt - len(metadata_tgt[i]))
+metadata_src = np.array(metadata_src)
+metadata_tgt = np.array(metadata_tgt)
+
+# make list of BLAST hits
 blast_red_file = os.path.join(results_dir, blast_red_file)
-
-# get list of sequence indices for each cluster
-cluster_idxs = []
-with open(cluster_file, 'r') as f:
-    reader = csv.reader(f)
-    for i, row in enumerate(reader):
-        if i == 0:
-            # skip header
-            continue
-        num = row[0]
-        representative = row[1]
-        members = row[2:]
-        members = [int(x) for x in members]
-        cluster_idxs.append(members)
-
-# make combined list of indices of all sequences in any cluster
-all_cluster_idxs = []
-for cl in cluster_idxs:
-    all_cluster_idxs.extend(cl)
-
-# get full metadata string for each cluster element
-cluster_mds = []
-for cl in cluster_idxs:
-    mds = []
-    for e in cl:
-        md = dataset.getmd(e)
-        if md is None:
-            print('no metadata found for sequence', e)
-        else:
-            mds.append(md[:-1])
-    cluster_mds.append(mds)
-
-all_cluster_mds = []
-for cl in cluster_mds:
-    all_cluster_mds.extend(cl)
-
-# get list of all pairs we hope to find
-pairs = []
-for cl in cluster_mds:
-    pairs_cl = []
-    clen = len(cl)
-    for i in range(clen):
-        for j in range(i+1, clen):
-            pairs_cl.append((cl[i], cl[j]))
-    pairs.append(pairs_cl)
-
-# iterate over reduced blast file
-hits = [[] for _ in range(len(cluster_idxs))] # track hit locations
-maxhits = [len(x) for x in pairs] # compute maximum number of hits for each cluster
+blast_dict = defaultdict(list)
 with open(blast_red_file, 'r') as f:
     lastquery = ''
     for line in f:
         # get metadata for this line if applicable
         if len(line) < 2:
             continue
-        elif 'Query=' in line:
-            lastquery = line[7:-1]
-            continue
+        if 'Query=' in line:
+            lastquery = line[7:].strip()
         else:
             md =' '.join(line.split()[:-2]) # remove score numbers and whitespace
+            blast_dict[lastquery].append(md)
 
-        # check whether the sequence on this line AND the last query sequence is in any cluster
-        if md in all_cluster_mds and lastquery in all_cluster_mds:
-            # figure out which cluster it's in
-            clust_num = -1
-            for i, cl in enumerate(cluster_mds):
-                if md in cl:
-                    clust_num = i
-                    break
-            # this shouldn't happen
-            if clust_num == -1:
-                print('fatal error: element', md, 'found in all clusters but no specific cluster')
+# helper function: get all hashes matching a metadata string from a given 2D metadata numpy array + hash index
+def md2hash(md, md_arr, hash_index : dd.HashIndex):
+    # if no matches, return none
+    if md not in md_arr:
+        return None
+    
+    # iterate over indices matching md, retrieve hashes
+    indices = np.argwhere(md_arr == md)
+    hashes = []
+    for data in indices:
+        data = tuple(data)
+        hashes.append(hash_index.get_hashes(data))
+
+    # return in (hash_table, index) format
+    return np.array(hashes).T
+
+# validate
+print('running eval')
+hits = 0
+misses = 0
+rejected = 0
+collisions = 0
+for key, matches in blast_dict.items():
+    # get hashes, reject all matches if none found
+    key_hashes = md2hash(key, metadata_tgt, hash_index_tgt)
+    if key_hashes is None:
+        rejected += len(matches)
+        continue
+
+    # recall: iterate over source dataset BLAST hits, find those that have been hashed and check for collisions
+    # recall = hits / (hits + misses)
+    for val in tqdm(matches):
+        val_hashes = md2hash(val, metadata_src, hash_index_src)
+        if val_hashes is None:
+            rejected += 1
+            continue
+        
+        # iterate over hash tables, check for matches with set operations
+        hit = False
+        for i in range(n_hash):
+            if bool(set(val_hashes[i]) & set(key_hashes[i])):
+                hit = True
                 break
-            
-            # check whether query is in the same cluster
-            # avoid duplicate hits by checking pairs and pruning as we go
-            for i, pair in enumerate(pairs[clust_num]):
-                if lastquery in pair and md in pair:
-                    #print(clust_num, '\t', line[:-1]) # checking score vs cluster num
-                    hits[clust_num].append((cluster_mds[clust_num].index(pair[0]), cluster_mds[clust_num].index(pair[1])))
-                    pairs[clust_num].pop(i)
+        
+        # update counters
+        if hit:
+            hits += 1
+        else:
+            misses += 1
 
-# print number of hits
-print('summary:')
-for i in range(len(hits)):
-    if args.output == 'summary':
-        # don't print full list of hits
-        print('cluster', i, ':', len(hits[i]), '/', maxhits[i], '({:.2f}%)'.format(100 * len(hits[i]) / maxhits[i]))
-    elif args.output == 'allhits':
-        # print full list of hits
-        print('cluster', i, ':', len(hits[i]), '/', maxhits[i], '({:.2f}%)'.format(100 * len(hits[i]) / maxhits[i]), hits[i])
-    elif args.output == 'gephicsv':
-        # make gephi edge list CSV
-        for edge in hits[i]:
-            print(str(cluster_idxs[i][edge[0]]) + ';' + str(cluster_idxs[i][edge[1]]))
+    # count unique hash collisions between source and target sequences
+    # convert back to (index, hash_table) format
+    key_hashes = key_hashes.T
+    for hashes in tqdm(key_hashes):
+        # output: list of lists
+        data = hash_index_src.get_data(hashes)
+        # flatten + get unique
+        data = set(itertools.chain(*data))
+        # count unique values
+        collisions += len(data)
 
-# across all hits
-if args.output == 'summary' or args.output == 'allhits':
-    hit_nums = [len(hits[i]) for i in range(len(hits))]
-    print('total:', np.sum(hit_nums), '/', np.sum(maxhits), '({:.2f}%)'.format(100 * np.sum(hit_nums) / np.sum(maxhits)))
+# compute possible collisions on all hashed sequences
+comparisons = 0
+tgt_chunks = []
+for i in range(len(hash_index_tgt.filenames)):
+    tgt_chunks += hash_index_tgt.chunks_from_file(i, max_len, 0.5, k)
+for i in range(len(hash_index_src.filenames)):
+    src_chunks_i = hash_index_src.chunks_from_file(i, max_len, 0.5, k)
+    comparisons += len(tgt_chunks) * len(src_chunks_i)
+
+print('BLAST recall:', hits / (hits + misses))
+print('total hits and misses:', hits, misses)
+print('not found:', rejected)
+print('total collisions:', collisions, '({}%)'.format(collisions / comparisons * 100.0))
+print('possible pairwise comparisons:', comparisons)

@@ -141,28 +141,45 @@ class DataIndex:
                 length += len(file)
             return length
         
-# sparse hash table w/ collision count tracking using native python data structures
+# sparse bidirectional hash table w/ collision count tracking using native python data structures
 class HashTable:
     def __init__(self):
         self.index = defaultdict(list)
+        self.inv_index = dict()
         self.counter = Counter()
 
     def add(self, hash, data):
         self.index[hash].append(data)
+        self.inv_index[data] = hash
         self.counter[hash] += 1
-
+    
+    def get_hash(self, data):
+        return self.inv_index[data]
+    
+    def get_data(self, hash):
+        return self.index[hash]
 
 # manages both data input and hash tables
 class HashIndex:
     def __init__(self, path, n=1, ext='fa'):
+        self.n = n
         self.filenames = glob.glob(os.path.join(path, '*.' + ext))
         self.hash_tables = [HashTable() for _ in range(n)]
 
     # add the same data to each hash table at the specified n hash values
     def add(self, hashes, data):
-        assert len(hashes) == len(self.hash_tables)
+        assert len(hashes) == self.n
         for i in range(len(hashes)):
             self.hash_tables[i].add(hashes[i], data)
+    
+    # return all hashes for one data tuple
+    def get_hashes(self, data):
+        return [self.hash_tables[i].get_hash(data) for i in range(self.n)]
+    
+    # return all data tuples for a list of n hashes
+    def get_data(self, hashes):
+        assert len(hashes) == self.n
+        return [self.hash_tables[i].get_data(hashes[i]) for i in range(self.n)]
     
     def seqs_from_file(self, fileidx, k=4, metadata=False):
         seqs = []
